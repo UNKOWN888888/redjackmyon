@@ -8,6 +8,9 @@ import { loadPartial } from './helpers/load-partial.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const bootSource = fs.readFileSync(path.join(rootDir, 'src', 'partials', '00-boot.js'), 'utf8');
+const userscriptMeta = fs.readFileSync(path.join(rootDir, 'src', 'userscript.meta.js'), 'utf8');
+
+assert.match(userscriptMeta, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
 
 function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } = {}) {
   const attributes = new Set(alreadyActive ? ['data-autotrigger-script-active'] : []);
