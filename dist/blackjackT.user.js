@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.88
+// @version      1.89
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 실제 close-icon 좌석 집합과 지갑 총액을 매 클릭마다 검증하고, 중복 클릭·추정금액 오판·추가좌석 브로드캐스트·의사결정 패널 오클릭·입력 중간값 실행을 차단합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -103,6 +103,8 @@
     const DEAL_COOLDOWN_MS = 450;
     const INSURANCE_COOLDOWN_MS = 200;
     const INSURANCE_WATCH_INTERVAL_MS = 40;
+    const INSURANCE_CLICK_VERIFY_MS = 90;
+    const INSURANCE_CLICK_MAX_ATTEMPTS = 2;
     const AUTOBET_COUNT_VERIFY_MS = 650;
     const AUTOBET_COUNT_MISSING_GRACE_MS = 420;
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
@@ -140,6 +142,7 @@
     let dealClickCount = 0;
     let lastInsuranceClickAt = 0;
     let insuranceClickCount = 0;
+    let insuranceClickInFlight = false;
     let lastBetSetupAt = 0;
     let betSetupCount = 0;
     let autoplayStartCount = 0;
@@ -4992,22 +4995,81 @@
         return null;
     }
 
-    function clickInsuranceNoElement(noBtn) {
-        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
-        const target = noBtn.closest?.('[data-id="no"]') || noBtn;
-        return robustClick(target);
+    function getInsuranceNoClickTarget(noBtn) {
+        if (!noBtn) return null;
+        const rect = noBtn.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return noBtn;
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const hit = noBtn.ownerDocument?.elementFromPoint?.(x, y);
+        if (hit && (hit === noBtn || noBtn.contains?.(hit))) return hit;
+        return noBtn;
     }
 
-    function checkAndClickInsuranceNo() {
-        if (isScriptStopped()) return;
-        if (isAutomationLocked()) return;
-        if (Date.now() - lastInsuranceClickAt < INSURANCE_COOLDOWN_MS) return;
+    function clickInsuranceNoElement(noBtn, attempt = 0) {
+        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
+        const root = noBtn.closest?.('[data-id="no"]') || noBtn;
+        const rect = root.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const target = getInsuranceNoClickTarget(root);
+        const profile = attempt === 0 ? 'mouse' : 'touch';
+        return fireFullClick(target, x, y, {
+            profile,
+            touch: profile === 'touch',
+            nativeClick: false,
+        });
+    }
+
+    async function waitForInsuranceNoResolved() {
+        return waitForCondition(() => !getInsuranceNoButton(), INSURANCE_CLICK_VERIFY_MS, 10);
+    }
+
+    async function checkAndClickInsuranceNo() {
+        if (isScriptStopped()) return false;
+        if (isAutomationLocked()) return false;
+        if (insuranceClickInFlight) return false;
+        if (Date.now() - lastInsuranceClickAt < INSURANCE_COOLDOWN_MS) return false;
         const noBtn = getInsuranceNoButton();
-        if (!noBtn) return;
-        console.log('[AutoTrigger] 인슈어런스 "아니오" decision-panel 감지 → 즉시 클릭');
-        if (clickInsuranceNoElement(noBtn)) {
-            lastInsuranceClickAt = Date.now();
-            insuranceClickCount++;
+        if (!noBtn) return false;
+
+        insuranceClickInFlight = true;
+        try {
+            console.log('[AutoTrigger] 인슈어런스 "아니오" decision-panel 감지 → 즉시 클릭');
+            for (let attempt = 0; attempt < INSURANCE_CLICK_MAX_ATTEMPTS; attempt++) {
+                const current = getInsuranceNoButton();
+                if (!current) {
+                    insuranceClickCount++;
+                    return true;
+                }
+                const clickSent = clickInsuranceNoElement(current, attempt);
+                if (!clickSent) continue;
+
+                lastInsuranceClickAt = Date.now();
+                pushBetLog('info', 'insurance_no_click_try', {
+                    attempt: attempt + 1,
+                    profile: attempt === 0 ? 'mouse' : 'touch',
+                    target: getElementLabel(current),
+                });
+                if (await waitForInsuranceNoResolved()) {
+                    insuranceClickCount++;
+                    pushBetLog('info', 'insurance_no_click_confirmed', {
+                        attempt: attempt + 1,
+                    });
+                    console.log('[AutoTrigger] 인슈어런스 "아니오" 클릭 확인 완료');
+                    return true;
+                }
+            }
+
+            pushBetLog('warn', 'insurance_no_click_not_confirmed', {
+                attempts: INSURANCE_CLICK_MAX_ATTEMPTS,
+                visible: getInsuranceNoButton() ? 'Y' : 'N',
+            });
+            console.warn('[AutoTrigger] 인슈어런스 "아니오" 클릭 반응 미확인 → 다음 감시 주기에 재시도');
+            return false;
+        } finally {
+            insuranceClickInFlight = false;
         }
     }
 
@@ -5565,7 +5627,7 @@
     }, FAST_SEAT_CHECK_INTERVAL_MS);
 
     setInterval(() => {
-        checkAndClickInsuranceNo();
+        checkAndClickInsuranceNo().catch(e => console.error('[AutoTrigger] insurance watcher error:', e));
     }, INSURANCE_WATCH_INTERVAL_MS);
 
     // ========== 감시 루프 ==========
@@ -5667,7 +5729,7 @@
         }
 
         checkAndClickDealNow();
-        checkAndClickInsuranceNo();
+        checkAndClickInsuranceNo().catch(e => console.error('[AutoTrigger] insurance check error:', e));
 
         if (Date.now() - lastTriggerAt < COOLDOWN_MS) return;
 
@@ -5887,8 +5949,8 @@
             const n = getRoundNumber();
             const dealEl = qsDeep('[data-testid="deal_now"]');
             const dealVisible = dealEl ? isVisible(dealEl) : false;
-            const insEl = qsDeep('[data-id="no"]');
-            const insVisible = insEl && (insEl.textContent || '').includes('아니오') ? isVisible(insEl) : false;
+            const insEl = getInsuranceNoButton();
+            const insVisible = !!insEl;
             const sitVisible = isSitPromptVisible();
             const status = document.getElementById('at-status');
             if (status) {

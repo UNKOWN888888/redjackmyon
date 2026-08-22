@@ -35,21 +35,80 @@
         return null;
     }
 
-    function clickInsuranceNoElement(noBtn) {
-        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
-        const target = noBtn.closest?.('[data-id="no"]') || noBtn;
-        return robustClick(target);
+    function getInsuranceNoClickTarget(noBtn) {
+        if (!noBtn) return null;
+        const rect = noBtn.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return noBtn;
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const hit = noBtn.ownerDocument?.elementFromPoint?.(x, y);
+        if (hit && (hit === noBtn || noBtn.contains?.(hit))) return hit;
+        return noBtn;
     }
 
-    function checkAndClickInsuranceNo() {
-        if (isScriptStopped()) return;
-        if (isAutomationLocked()) return;
-        if (Date.now() - lastInsuranceClickAt < INSURANCE_COOLDOWN_MS) return;
+    function clickInsuranceNoElement(noBtn, attempt = 0) {
+        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
+        const root = noBtn.closest?.('[data-id="no"]') || noBtn;
+        const rect = root.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const target = getInsuranceNoClickTarget(root);
+        const profile = attempt === 0 ? 'mouse' : 'touch';
+        return fireFullClick(target, x, y, {
+            profile,
+            touch: profile === 'touch',
+            nativeClick: false,
+        });
+    }
+
+    async function waitForInsuranceNoResolved() {
+        return waitForCondition(() => !getInsuranceNoButton(), INSURANCE_CLICK_VERIFY_MS, 10);
+    }
+
+    async function checkAndClickInsuranceNo() {
+        if (isScriptStopped()) return false;
+        if (isAutomationLocked()) return false;
+        if (insuranceClickInFlight) return false;
+        if (Date.now() - lastInsuranceClickAt < INSURANCE_COOLDOWN_MS) return false;
         const noBtn = getInsuranceNoButton();
-        if (!noBtn) return;
-        console.log('[AutoTrigger] 인슈어런스 "아니오" decision-panel 감지 → 즉시 클릭');
-        if (clickInsuranceNoElement(noBtn)) {
-            lastInsuranceClickAt = Date.now();
-            insuranceClickCount++;
+        if (!noBtn) return false;
+
+        insuranceClickInFlight = true;
+        try {
+            console.log('[AutoTrigger] 인슈어런스 "아니오" decision-panel 감지 → 즉시 클릭');
+            for (let attempt = 0; attempt < INSURANCE_CLICK_MAX_ATTEMPTS; attempt++) {
+                const current = getInsuranceNoButton();
+                if (!current) {
+                    insuranceClickCount++;
+                    return true;
+                }
+                const clickSent = clickInsuranceNoElement(current, attempt);
+                if (!clickSent) continue;
+
+                lastInsuranceClickAt = Date.now();
+                pushBetLog('info', 'insurance_no_click_try', {
+                    attempt: attempt + 1,
+                    profile: attempt === 0 ? 'mouse' : 'touch',
+                    target: getElementLabel(current),
+                });
+                if (await waitForInsuranceNoResolved()) {
+                    insuranceClickCount++;
+                    pushBetLog('info', 'insurance_no_click_confirmed', {
+                        attempt: attempt + 1,
+                    });
+                    console.log('[AutoTrigger] 인슈어런스 "아니오" 클릭 확인 완료');
+                    return true;
+                }
+            }
+
+            pushBetLog('warn', 'insurance_no_click_not_confirmed', {
+                attempts: INSURANCE_CLICK_MAX_ATTEMPTS,
+                visible: getInsuranceNoButton() ? 'Y' : 'N',
+            });
+            console.warn('[AutoTrigger] 인슈어런스 "아니오" 클릭 반응 미확인 → 다음 감시 주기에 재시도');
+            return false;
+        } finally {
+            insuranceClickInFlight = false;
         }
     }

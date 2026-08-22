@@ -132,7 +132,11 @@ function testBetClickRejectsOverlayOutsideSeatBoundary() {
 
 function testInsuranceNoDispatchesOneAction() {
   const noButton = makeElement('insuranceNo', { attrs: { 'data-id': 'no' } });
-  attachDoc(noButton);
+  const innerLabel = makeElement('insuranceNoLabel');
+  innerLabel.parentElement = noButton;
+  noButton.children = [innerLabel];
+  const { setTopElement } = attachDoc(noButton, innerLabel);
+  setTopElement(innerLabel);
   noButton.textContent = '아니오';
   noButton.closest = selector => selector.includes('[data-id="no"]') ? noButton : null;
   let clickCount = 0;
@@ -140,8 +144,10 @@ function testInsuranceNoDispatchesOneAction() {
     window: noButton.ownerDocument.defaultView,
     isVisible: () => true,
     isDisabledLike: () => false,
-    robustClick: target => {
-      assert.equal(target, noButton);
+    fireFullClick: (target, x, y, options) => {
+      assert.equal(target, innerLabel, 'insurance click should use the rendered element at the button center');
+      assert.equal(options.profile, 'mouse');
+      assert.equal(options.nativeClick, false);
       clickCount++;
       return true;
     },
@@ -149,6 +155,49 @@ function testInsuranceNoDispatchesOneAction() {
 
   assert.equal(sandbox.clickInsuranceNoElement(noButton), true);
   assert.equal(clickCount, 1, 'insurance no must be dispatched once even when it has nested children');
+}
+
+async function testInsuranceNoRetriesWithTouchAndConfirmsResolution() {
+  const noButton = makeElement('insuranceNo', {
+    attrs: { 'data-id': 'no', 'data-disabled': 'false', lang: 'ko' },
+  });
+  attachDoc(noButton);
+  noButton.textContent = '아니오';
+  noButton.closest = selector => selector.includes('[data-id="no"]') ? noButton : null;
+
+  let panelOpen = true;
+  const profiles = [];
+  const logs = [];
+  const sandbox = loadPartial('12-deal-insurance.js', {
+    console,
+    window: noButton.ownerDocument.defaultView,
+    Date,
+    INSURANCE_COOLDOWN_MS: 200,
+    INSURANCE_CLICK_VERIFY_MS: 90,
+    INSURANCE_CLICK_MAX_ATTEMPTS: 2,
+    lastInsuranceClickAt: 0,
+    insuranceClickCount: 0,
+    insuranceClickInFlight: false,
+    isScriptStopped: () => false,
+    isAutomationLocked: () => false,
+    isVisible: () => true,
+    isDisabledLike: () => false,
+    qsaDeep: selector => panelOpen && selector.includes('[data-id="no"]') ? [noButton] : [],
+    fireFullClick: (_target, _x, _y, options) => {
+      profiles.push(options.profile);
+      if (options.profile === 'touch') panelOpen = false;
+      return true;
+    },
+    waitForCondition: async fn => !!fn(),
+    pushBetLog: (level, message, data) => logs.push({ level, message, data }),
+    getElementLabel: () => 'insurance-no',
+  });
+
+  assert.equal(await sandbox.checkAndClickInsuranceNo(), true);
+  assert.deepEqual(profiles, ['mouse', 'touch'], 'unconfirmed mouse dispatch should retry once with touch events');
+  assert.equal(sandbox.insuranceClickCount, 1, 'insurance count must increase only after the panel resolves');
+  assert.equal(sandbox.insuranceClickInFlight, false);
+  assert.equal(logs.some(log => log.message === 'insurance_no_click_confirmed'), true);
 }
 
 function loadAutoplayDomSandbox(overrides = {}) {
@@ -325,6 +374,7 @@ function testBlockingPopupSkipsBodyFallbackAfterPrimaryClickDismissesPopup() {
 testRobustClickDispatchesButtonActionToSingleTarget();
 testBetClickRejectsOverlayOutsideSeatBoundary();
 testInsuranceNoDispatchesOneAction();
+await testInsuranceNoRetriesWithTouchAndConfirmsResolution();
 testBettingWindowRecognizesSingleChipAndStackButtons();
 testCloseAutoplayDialogDoesNotClickGlobalCloseWhenNoAutoplayModal();
 await testTopUpModifyFailsWhenFinalRoundStillBelowTarget();

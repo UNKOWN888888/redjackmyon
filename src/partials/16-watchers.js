@@ -97,7 +97,7 @@
         }
 
         checkAndClickDealNow();
-        checkAndClickInsuranceNo();
+        checkAndClickInsuranceNo().catch(e => console.error('[AutoTrigger] insurance check error:', e));
 
         if (Date.now() - lastTriggerAt < COOLDOWN_MS) return;
 

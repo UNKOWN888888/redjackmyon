@@ -120,8 +120,8 @@
             const n = getRoundNumber();
             const dealEl = qsDeep('[data-testid="deal_now"]');
             const dealVisible = dealEl ? isVisible(dealEl) : false;
-            const insEl = qsDeep('[data-id="no"]');
-            const insVisible = insEl && (insEl.textContent || '').includes('아니오') ? isVisible(insEl) : false;
+            const insEl = getInsuranceNoButton();
+            const insVisible = !!insEl;
             const sitVisible = isSitPromptVisible();
             const status = document.getElementById('at-status');
             if (status) {

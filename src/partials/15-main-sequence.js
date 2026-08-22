@@ -166,5 +166,5 @@
     }, FAST_SEAT_CHECK_INTERVAL_MS);
 
     setInterval(() => {
-        checkAndClickInsuranceNo();
+        checkAndClickInsuranceNo().catch(e => console.error('[AutoTrigger] insurance watcher error:', e));
     }, INSURANCE_WATCH_INTERVAL_MS);

@@ -34,6 +34,8 @@
     const DEAL_COOLDOWN_MS = 450;
     const INSURANCE_COOLDOWN_MS = 200;
     const INSURANCE_WATCH_INTERVAL_MS = 40;
+    const INSURANCE_CLICK_VERIFY_MS = 90;
+    const INSURANCE_CLICK_MAX_ATTEMPTS = 2;
     const AUTOBET_COUNT_VERIFY_MS = 650;
     const AUTOBET_COUNT_MISSING_GRACE_MS = 420;
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
@@ -71,6 +73,7 @@
     let dealClickCount = 0;
     let lastInsuranceClickAt = 0;
     let insuranceClickCount = 0;
+    let insuranceClickInFlight = false;
     let lastBetSetupAt = 0;
     let betSetupCount = 0;
     let autoplayStartCount = 0;
