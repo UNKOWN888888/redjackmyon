@@ -11,6 +11,7 @@ const bootSource = fs.readFileSync(path.join(rootDir, 'src', 'partials', '00-boo
 const userscriptMeta = fs.readFileSync(path.join(rootDir, 'src', 'userscript.meta.js'), 'utf8');
 
 assert.match(userscriptMeta, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
+assert.match(userscriptMeta, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
 
 function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } = {}) {
   const attributes = new Set(alreadyActive ? ['data-autotrigger-script-active'] : []);

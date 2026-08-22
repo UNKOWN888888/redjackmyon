@@ -83,6 +83,7 @@ assert.match(loaderSource, /@connect\s+raw\.githubusercontent\.com/);
 assert.match(loaderSource, /@grant\s+GM_xmlhttpRequest/);
 assert.match(loaderSource, /@grant\s+GM_info/);
 assert.match(loaderSource, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
+assert.match(loaderSource, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
 assert.match(
   loaderSource,
   /https:\/\/raw\.githubusercontent\.com\/UNKOWN888888\/redjackmyon\/main\/dist\/blackjackT\.user\.js/,
