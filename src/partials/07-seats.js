@@ -336,6 +336,7 @@
                 amount,
                 hasChip: state.hasChip,
                 chipCount: state.chipCount,
+                hasGhost: hasGhostChip(getSeatByNumber(n)),
                 inferred,
             };
         });
@@ -361,6 +362,29 @@
             .filter(item => Number.isFinite(item.amount))
             .slice(0, expected)
             .every(item => item.amount === plan.perSeatActual);
+    }
+
+    function isBetSummaryWalletConfirmed(summary, plan) {
+        const expected = Math.max(1, toInt(plan?.used, getMaxSeatCount(), 1, 7));
+        if (!summary || !plan || plan.totalActual <= 0 || plan.perSeatActual <= 0) return false;
+        if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
+        if (getCloseVerifiedSeatNumbers(summary.seats).length !== expected) return false;
+        if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
+        return summary.amounts.every(item =>
+            item.hasChip &&
+            !item.hasGhost &&
+            (!Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
+        );
+    }
+
+    function getUnknownBetWalletRecovery(summary, plan) {
+        const variance = getWalletTotalBetVariance(plan);
+        const recoverable = !!summary && summary.ambiguousCount > 0 &&
+            variance.status === 'under' &&
+            Number.isFinite(variance.reading?.amount) &&
+            variance.reading.amount >= 0 &&
+            variance.reading.amount < variance.expected;
+        return { recoverable, variance };
     }
 
     function isTargetBetTotalOverLimit(numbers = getRememberedBetSeatNumbers()) {
@@ -652,9 +676,10 @@
         if (targets.length < expected) return false;
 
         const summary = getTargetSeatBetSummary(targets, expectedPlan);
-        return summary.detectedCount >= expected &&
+        const amountsExact = summary.detectedCount >= expected &&
             summary.total === expectedPlan.totalActual &&
             summary.amounts.every(item => item.amount === expectedPlan.perSeatActual);
+        return amountsExact || isBetSummaryWalletConfirmed(summary, expectedPlan);
     }
 
     function hasVisibleInScope(scope, selector) {

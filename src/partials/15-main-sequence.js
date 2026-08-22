@@ -24,10 +24,18 @@
             let expectedPlan = getExpectedBetPlan();
             let readyForRound = areBetSeatsReadyForRoundAction(expectedPlan);
             const currentBetSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
-            if (isBettingWindowOpen() && currentBetSummary.ambiguousCount > 0) {
-                lastFailReason = 'bet_amount_unknown_current';
-                console.warn('[AutoTrigger] visible chip exists but amount is unknown; recovery paused to avoid double betting');
-                return;
+            const walletConfirmed = isBetSummaryWalletConfirmed(currentBetSummary, expectedPlan);
+            if (walletConfirmed) readyForRound = true;
+            if (isBettingWindowOpen() && currentBetSummary.ambiguousCount > 0 && !walletConfirmed) {
+                const recovery = getUnknownBetWalletRecovery(currentBetSummary, expectedPlan);
+                if (!recovery.recoverable) {
+                    lastFailReason = 'bet_amount_unknown_current';
+                    console.warn('[AutoTrigger] visible chip exists but amount is unknown; recovery paused to avoid double betting');
+                    return;
+                }
+                console.warn(`[AutoTrigger] 좌석 금액 미인식이지만 지갑 총액 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} 부족 확인 → 베팅 초기화 후 복구`);
+                markBetStateNeedsRecovery('bet_amount_unknown_under_target');
+                readyForRound = false;
             }
             if (readyForRound && !isBetSettingsApplied()) {
                 markBetSettingsApplied();

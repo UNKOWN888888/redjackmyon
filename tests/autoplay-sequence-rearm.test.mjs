@@ -30,6 +30,8 @@ function baseSequenceSandbox(overrides = {}) {
     getExpectedBetPlan: () => ({ totalActual: 3000 }),
     areBetSeatsReadyForRoundAction: () => true,
     getTargetSeatBetSummary: () => ({ ambiguousCount: 0 }),
+    isBetSummaryWalletConfirmed: () => false,
+    getUnknownBetWalletRecovery: () => ({ recoverable: false, variance: null }),
     isBettingWindowOpen: () => false,
     markBetSettingsApplied: noop,
     isBetSettingsApplied: () => true,
@@ -43,6 +45,7 @@ function baseSequenceSandbox(overrides = {}) {
     getAutoplayButton: () => autoplayBtn,
     verifyAutoplayStartSafety: () => true,
     pushBetLog: noop,
+    formatMoney: String,
     getElementLabel: el => el?.kind || 'el',
     robustClick: el => {
       if (el === autoplayBtn) autoplayClickCount++;
@@ -129,6 +132,41 @@ async function testRunSequenceRechecksSafetyImmediatelyBeforeStartClick() {
   assert.equal(safetyCalls, 2, 'runSequence must run safety check again after the autoplay menu opens');
   assert.equal(env.startClickCount, 0, 'start button must not be clicked if the second safety check fails');
   assert.equal(dialogClosed, true, 'autoplay menu should be closed when the second safety check fails');
+}
+
+async function testUnknownAmountUnderTargetTriggersBetRecovery() {
+  let setupCalled = false;
+  let recoveryReason = null;
+  const env = baseSequenceSandbox({
+    getExpectedBetPlan: () => ({ totalActual: 3000, perSeatActual: 1500, used: 2 }),
+    getControlledSeatNumbers: () => [5, 7],
+    getRememberedBetSeatNumbers: () => [5, 7],
+    getTargetSeatBetSummary: () => ({ ambiguousCount: 2 }),
+    isBetSummaryWalletConfirmed: () => false,
+    getUnknownBetWalletRecovery: () => ({
+      recoverable: true,
+      variance: {
+        expected: 3000,
+        reading: { amount: 1500 },
+      },
+    }),
+    areBetSeatsReadyForRoundAction: () => false,
+    isBettingWindowOpen: () => true,
+    isBetSettingsApplied: () => false,
+    markBetStateNeedsRecovery: reason => {
+      recoveryReason = reason;
+      return true;
+    },
+    setupBetAmount: async () => {
+      setupCalled = true;
+      return true;
+    },
+  });
+
+  await env.sandbox.runSequence();
+
+  assert.equal(recoveryReason, 'bet_amount_unknown_under_target');
+  assert.equal(setupCalled, true, 'wallet-confirmed underbet must be reset instead of waiting forever');
 }
 
 function baseRearmSandbox(overrides = {}) {
@@ -219,6 +257,7 @@ async function testRearmRechecksSafetyImmediatelyBeforeStartClick() {
 
 await testRunSequenceRecomputesPlanAfterSetup();
 await testRunSequenceRechecksSafetyImmediatelyBeforeStartClick();
+await testUnknownAmountUnderTargetTriggersBetRecovery();
 await testRearmBlocksDirtyBetSettings();
 await testRearmRechecksSafetyImmediatelyBeforeStartClick();
 

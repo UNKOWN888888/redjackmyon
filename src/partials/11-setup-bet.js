@@ -64,6 +64,7 @@
             //        타인 점유로 실패한 자리는 자연스럽게 건너뛰게 됨.
             const finalSeatNumbers = [];
             const triedEmptySeats = new Set();
+            let resetExistingBet = false;
             for (const n of targetSeatNumbers) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
                 if (finalSeatNumbers.length >= targetSeatCount) break;
@@ -239,6 +240,7 @@
                         failReason = `close_seat_${n}_unknown`;
                         return false;
                     }
+                    resetExistingBet = true;
                     if (!(await sitSeatIfNeeded(n))) {
                         failReason = `resit_seat_${n}_unknown`;
                         return false;
@@ -256,10 +258,33 @@
                         failReason = `close_seat_${n}`;
                         return false;
                     }
+                    resetExistingBet = true;
                     if (!(await sitSeatIfNeeded(n))) {
                         failReason = `resit_seat_${n}`;
                         return false;
                     }
+                }
+            }
+
+            if (resetExistingBet) {
+                let walletAfterReset = getWalletTotalBetReading();
+                const walletResetConfirmed = await waitForCondition(() => {
+                    walletAfterReset = getWalletTotalBetReading();
+                    return walletAfterReset.detected &&
+                        !walletAfterReset.ambiguous &&
+                        walletAfterReset.amount === 0;
+                }, WALLET_RESET_VERIFY_MS, VERIFY_POLL_MS);
+                if (!walletResetConfirmed) {
+                    failReason = 'wallet_total_not_zero_before_setup';
+                    pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
+                        detected: walletAfterReset.detected ? 'Y' : 'N',
+                        ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
+                        amount: Number.isFinite(walletAfterReset.amount)
+                            ? formatMoney(walletAfterReset.amount)
+                            : 'unknown',
+                    });
+                    console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
+                    return false;
                 }
             }
 
@@ -307,7 +332,8 @@
 
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });
             const finalBetSummary = getTargetSeatBetSummary(lastTargetSeatNumbers, plan);
-            if (finalBetSummary.total !== plan.totalActual) {
+            const finalWalletConfirmed = isBetSummaryWalletConfirmed(finalBetSummary, plan);
+            if (finalBetSummary.total !== plan.totalActual && !finalWalletConfirmed) {
                 failReason = finalBetSummary.total > plan.totalActual
                     ? 'bet_total_over_target_after_setup'
                     : 'bet_total_under_target_after_setup';
@@ -322,7 +348,7 @@
                 });
                 return false;
             }
-            if (!areBetSeatsReadyForRoundAction(plan)) {
+            if (!areBetSeatsReadyForRoundAction(plan) && !finalWalletConfirmed) {
                 failReason = 'bet_amount_not_detected_after_setup';
                 console.warn('[AutoTrigger] 칩 베팅 후 좌석 금액 인식 실패 → 자동베팅 활성화 중단, 복구 예정');
                 pushBetLog('error', 'bet_amount_not_detected_after_setup', {

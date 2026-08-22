@@ -116,6 +116,61 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
   seats.hasSeatCloseButton = seat => seat.seatNumber === 5 || seat.seatNumber === 7;
 
   assert.equal(seats.getCloseVerifiedSeatNumbers([3, 5, 7, 3]).join(','), '5,7');
+
+  const plan = {
+    used: 2,
+    totalActual: 3000,
+    perSeatActual: 1500,
+  };
+  const unknownAmounts = {
+    seats: [5, 7],
+    amounts: [
+      { seatNumber: 5, amount: null, hasChip: true, hasGhost: false },
+      { seatNumber: 7, amount: null, hasChip: true, hasGhost: false },
+    ],
+    total: 0,
+    detectedCount: 0,
+    ambiguousCount: 2,
+  };
+  seats.getMaxSeatCount = () => 2;
+  seats.toInt = (value, fallback, min, max) => {
+    const parsed = Number.parseInt(value, 10);
+    return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
+  };
+  seats.getCloseVerifiedSeatNumbers = () => [5, 7];
+  seats.getWalletTotalBetVariance = () => ({
+    status: 'exact',
+    expected: 3000,
+    reading: { detected: true, ambiguous: false, amount: 3000 },
+  });
+  assert.equal(seats.isBetSummaryWalletConfirmed(unknownAmounts, plan), true);
+  assert.equal(seats.isBetSummaryWalletConfirmed({
+    ...unknownAmounts,
+    amounts: [
+      { seatNumber: 5, amount: 750, hasChip: true, hasGhost: false },
+      { seatNumber: 7, amount: null, hasChip: true, hasGhost: false },
+    ],
+  }, plan), false, 'a detected per-seat mismatch must override an exact aggregate wallet total');
+  assert.equal(seats.isBetSummaryWalletConfirmed({
+    ...unknownAmounts,
+    amounts: [
+      { seatNumber: 5, amount: null, hasChip: true, hasGhost: true },
+      { seatNumber: 7, amount: null, hasChip: true, hasGhost: false },
+    ],
+  }, plan), false, 'ghost chips must not satisfy wallet-confirmed betting');
+
+  seats.getRememberedBetSeatNumbers = () => [5, 7];
+  seats.getTargetSeatBetSummary = () => unknownAmounts;
+  assert.equal(seats.areBetSeatsReadyForRoundAction(plan), true);
+
+  seats.getWalletTotalBetVariance = () => ({
+    status: 'under',
+    expected: 3000,
+    reading: { detected: true, ambiguous: false, amount: 1500 },
+  });
+  const recovery = seats.getUnknownBetWalletRecovery(unknownAmounts, plan);
+  assert.equal(recovery.recoverable, true);
+  assert.equal(recovery.variance.reading.amount, 1500);
 }
 
 console.log('runtime compatibility tests passed');

@@ -61,7 +61,14 @@
         const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
         const expectedPlan = getExpectedBetPlan();
         const betSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
-        if (isBettingWindowOpen() && betSummary.ambiguousCount > 0) {
+        const walletConfirmed = isBetSummaryWalletConfirmed(betSummary, expectedPlan);
+        if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
+            const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
+            if (recovery.recoverable) {
+                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 총액 부족 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
+                if (markBetStateNeedsRecovery('bet_amount_unknown_under_target')) runSequence();
+                return;
+            }
             if (lastFailReason !== 'bet_amount_unknown_current') {
                 console.warn('[AutoTrigger] visible chip exists but amount is unknown; wait instead of adding more chips');
             }
@@ -76,7 +83,7 @@
             return;
         }
 
-        if (isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !areBetSeatsReadyForRoundAction(expectedPlan)) {
+        if (isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
             console.warn('[AutoTrigger] betting window open but controlled seats have no valid chips; recovery required');
             if (markBetStateNeedsRecovery('bet_amount_not_detected_current')) runSequence();
             return;

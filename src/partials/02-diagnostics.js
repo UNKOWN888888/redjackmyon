@@ -495,6 +495,8 @@
             'autoplay_count_missing_after_start',
             'bet_amount_not_detected_current',
             'bet_amount_not_detected_after_setup',
+            'bet_amount_unknown_under_target',
+            'wallet_total_not_zero_before_setup',
             'bet_total_over_target',
             'bet_total_over_target_after_setup',
             'bet_total_mismatch',
