@@ -279,6 +279,13 @@
         );
     }
 
+    function getCloseVerifiedSeatNumbers(numbers) {
+        return uniqueSortedSeatNumbers(numbers).filter(n => {
+            const seat = getSeatByNumber(n);
+            return !!(seat && isVisible(seat) && hasSeatCloseButton(seat));
+        });
+    }
+
     function getControlledSeatNumbers() {
         return uniqueSortedSeatNumbers([
             ...getDirectVerifiedSeatNumbers(),
@@ -306,17 +313,12 @@
         const chipPlan = plan.chipPlan || [];
         if (chipPlan.length <= 0) return false;
 
-        const clickCount = getChipPlanClickCount(chipPlan);
-        if (clickCount <= 0) return false;
-
         const singleExactChip = chipPlan.length === 1 &&
             chipPlan[0].count === 1 &&
             chipPlan[0].value === plan.perSeatActual;
-        if (singleExactChip) {
-            return state.chipCount > 0 && state.chipCount <= SINGLE_CHIP_DOM_PART_LIMIT;
-        }
-
-        return state.chipCount > 0 && state.chipCount === clickCount;
+        return singleExactChip &&
+            state.chipCount > 0 &&
+            state.chipCount <= SINGLE_CHIP_DOM_PART_LIMIT;
     }
 
     function getTargetSeatBetSummary(numbers = getRememberedBetSeatNumbers(), expectedPlan = null) {

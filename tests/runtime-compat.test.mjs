@@ -108,4 +108,14 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
   assert.equal(seats.isSeatTakenByOther(seat), true);
 }
 
+{
+  const seats = loadPartial('07-seats.js', {});
+  seats.uniqueSortedSeatNumbers = numbers => [...new Set(numbers)].sort((a, b) => a - b);
+  seats.getSeatByNumber = seatNumber => ({ seatNumber });
+  seats.isVisible = () => true;
+  seats.hasSeatCloseButton = seat => seat.seatNumber === 5 || seat.seatNumber === 7;
+
+  assert.equal(seats.getCloseVerifiedSeatNumbers([3, 5, 7, 3]).join(','), '5,7');
+}
+
 console.log('runtime compatibility tests passed');

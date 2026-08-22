@@ -208,18 +208,13 @@
         );
     }
 
-    function areObservedStatesSafelyAtExpectedByChipCount(states, chipValue, clickCount) {
+    function areObservedStatesSafelyAtExpectedAmount(states, chipValue, clickCount) {
         if (!states || states.length <= 0) return false;
         if (!Number.isFinite(chipValue) || chipValue <= 0 || !Number.isFinite(clickCount) || clickCount <= 0) return false;
         return states.every(item => {
             if (item.hasGhost) return false;
-            if (item.observedAmount === item.expectedAmount) return true;
-            if (item.observedAmount !== null || !item.hasChip) return false;
-            const baseAmount = Math.max(0, item.baseAmount || 0);
-            const expectedDelta = item.expectedAmount - baseAmount;
-            if (expectedDelta !== chipValue * clickCount) return false;
-            const baseChipCount = Math.max(0, item.baseChipCount || 0);
-            return item.chipCount === baseChipCount + clickCount;
+            return Number.isFinite(item.observedAmount) &&
+                item.observedAmount === item.expectedAmount;
         });
     }
 
@@ -230,24 +225,49 @@
         );
     }
 
-    function getUniformObservedChipClicks(states, chipValue, maxClickCount, requireAmount = false) {
+    function getUniformObservedAmountClicks(states, chipValue, maxClickCount) {
         if (!states || states.length <= 0 || !Number.isFinite(chipValue) || chipValue <= 0) return null;
         const counts = [];
         for (const item of states) {
             if (item.hasGhost) return null;
-            let count = null;
-            if (Number.isFinite(item.observedAmount)) {
-                const delta = item.observedAmount - Math.max(0, item.baseAmount || 0);
-                if (delta < 0 || delta % chipValue !== 0) return null;
-                count = delta / chipValue;
-            } else {
-                if (requireAmount || !item.hasChip) return null;
-                count = (item.chipCount || 0) - Math.max(0, item.baseChipCount || 0);
-            }
+            // 한 개의 시각적 칩이 여러 DOM 조각으로 렌더링될 수 있으므로 chipCount를 클릭 수로 사용하지 않는다.
+            if (!Number.isFinite(item.observedAmount)) return null;
+            const delta = item.observedAmount - Math.max(0, item.baseAmount || 0);
+            if (delta < 0 || delta % chipValue !== 0) return null;
+            const count = delta / chipValue;
             if (!Number.isInteger(count) || count < 0 || count > maxClickCount) return null;
             counts.push(count);
         }
         return counts.every(count => count === counts[0]) ? counts[0] : null;
+    }
+
+    function getWalletBroadcastAppliedClicks(baseReading, currentReading, chipValue, seatCount, maxClickCount) {
+        if (!baseReading?.detected || baseReading.ambiguous ||
+            !currentReading?.detected || currentReading.ambiguous) return null;
+        if (!Number.isFinite(baseReading.amount) || !Number.isFinite(currentReading.amount)) return null;
+        if (!Number.isFinite(chipValue) || chipValue <= 0 ||
+            !Number.isFinite(seatCount) || seatCount <= 0) return null;
+
+        const perBroadcastClick = chipValue * seatCount;
+        const delta = currentReading.amount - baseReading.amount;
+        if (delta < 0 || delta % perBroadcastClick !== 0) return null;
+        const clicks = delta / perBroadcastClick;
+        if (!Number.isInteger(clicks) || clicks < 0 || clicks > maxClickCount) return null;
+        return clicks;
+    }
+
+    function getVerifiedBroadcastAppliedClicks(states, baseWalletReading, currentWalletReading, chipValue, seatCount, maxClickCount) {
+        const amountClicks = getUniformObservedAmountClicks(states, chipValue, maxClickCount);
+        const walletClicks = getWalletBroadcastAppliedClicks(
+            baseWalletReading,
+            currentWalletReading,
+            chipValue,
+            seatCount,
+            maxClickCount
+        );
+        if (Number.isFinite(walletClicks) && walletClicks > 0) return walletClicks;
+        if (Number.isFinite(amountClicks)) return amountClicks;
+        return Number.isFinite(walletClicks) ? walletClicks : null;
     }
 
     async function clickSingleSeatChipVerified(seatNumber, chipValue, maxPerSeatAmount = Infinity) {
@@ -323,7 +343,7 @@
                 baseChipCount: baseState.chipCount,
                 expectedAmount,
             }]);
-            if (areObservedStatesSafelyAtExpectedByChipCount([observed], chipValue, 1)) {
+            if (areObservedStatesSafelyAtExpectedAmount([observed], chipValue, 1)) {
                 console.log(`[AutoTrigger] individual chip=${chipValue} verified by chip-count inference`);
                 return true;
             }
@@ -339,7 +359,7 @@
                     baseChipCount: baseState.chipCount,
                     expectedAmount,
                 }]);
-                if (areObservedStatesSafelyAtExpectedByChipCount([rechecked], chipValue, 1)) {
+                if (areObservedStatesSafelyAtExpectedAmount([rechecked], chipValue, 1)) {
                     console.log(`[AutoTrigger] individual chip=${chipValue} verified by delayed chip-count inference`);
                     return true;
                 }
@@ -467,19 +487,27 @@
             });
         }
 
+        const walletBaseReading = typeof getWalletTotalBetReading === 'function'
+            ? getWalletTotalBetReading()
+            : null;
+        const readAppliedClicks = states => getVerifiedBroadcastAppliedClicks(
+            states,
+            walletBaseReading,
+            typeof getWalletTotalBetReading === 'function' ? getWalletTotalBetReading() : null,
+            chipValue,
+            targets.length,
+            clickCount
+        );
+
         let appliedClicks = 0;
         while (appliedClicks < clickCount) {
             if (isScriptStopped()) return false;
 
             const beforeStates = readSeatAmountsForExpectations(expectations);
-            const alreadyApplied = getUniformObservedChipClicks(beforeStates, chipValue, clickCount, false);
+            const alreadyApplied = readAppliedClicks(beforeStates);
             if (Number.isFinite(alreadyApplied) && alreadyApplied > appliedClicks) {
                 appliedClicks = alreadyApplied;
                 if (appliedClicks >= clickCount) return true;
-            }
-            if (areObservedStatesSafelyAtExpectedByChipCount(beforeStates, chipValue, clickCount) ||
-                areObservedStatesAtHardCap(beforeStates, maxPerSeatAmount)) {
-                return true;
             }
 
             const nextApplied = appliedClicks + 1;
@@ -527,23 +555,13 @@
 
                 await waitForCondition(() => {
                     const states = readSeatAmountsForExpectations(expectations);
-                    if (areObservedStatesSafelyAtExpectedByChipCount(states, chipValue, clickCount)) return true;
-                    if (areObservedStatesAtHardCap(states, maxPerSeatAmount)) return true;
-                    const applied = getUniformObservedChipClicks(states, chipValue, clickCount, false);
+                    const applied = readAppliedClicks(states);
                     return Number.isFinite(applied) && applied >= nextApplied;
                 }, BROADCAST_CLICK_PROGRESS_WAIT_MS, VERIFY_POLL_MS);
 
                 const observedStates = readSeatAmountsForExpectations(expectations);
                 const observed = formatObservedSeatStates(observedStates);
-                if (areObservedStatesSafelyAtExpectedByChipCount(observedStates, chipValue, clickCount)) {
-                    console.log(`[AutoTrigger] broadcast progress chip=${chipValue} x${clickCount} verified by chip-count inference (${observed})`);
-                    return true;
-                }
-                if (areObservedStatesAtHardCap(observedStates, maxPerSeatAmount)) {
-                    console.log(`[AutoTrigger] broadcast progress chip=${chipValue} reached hard cap (${observed})`);
-                    return true;
-                }
-                const observedApplied = getUniformObservedChipClicks(observedStates, chipValue, clickCount, false);
+                const observedApplied = readAppliedClicks(observedStates);
                 if (Number.isFinite(observedApplied) && observedApplied >= nextApplied) {
                     appliedClicks = observedApplied;
                     progressed = true;
@@ -560,15 +578,7 @@
                     await sleep(BET_NO_EFFECT_RECHECK_MS);
                     const recheckedStates = readSeatAmountsForExpectations(expectations);
                     const rechecked = formatObservedSeatStates(recheckedStates);
-                    if (areObservedStatesSafelyAtExpectedByChipCount(recheckedStates, chipValue, clickCount)) {
-                        console.log(`[AutoTrigger] broadcast progress chip=${chipValue} x${clickCount} verified by delayed chip-count inference (${rechecked})`);
-                        return true;
-                    }
-                    if (areObservedStatesAtHardCap(recheckedStates, maxPerSeatAmount)) {
-                        console.log(`[AutoTrigger] broadcast progress chip=${chipValue} reached hard cap after delayed read (${rechecked})`);
-                        return true;
-                    }
-                    const recheckedApplied = getUniformObservedChipClicks(recheckedStates, chipValue, clickCount, false);
+                    const recheckedApplied = readAppliedClicks(recheckedStates);
                     if (Number.isFinite(recheckedApplied) && recheckedApplied >= nextApplied) {
                         appliedClicks = recheckedApplied;
                         progressed = true;
@@ -635,10 +645,8 @@
         }
 
         const finalStates = readSeatAmountsForExpectations(expectations);
-        if (areObservedStatesSafelyAtExpectedByChipCount(finalStates, chipValue, clickCount) ||
-            areObservedStatesAtHardCap(finalStates, maxPerSeatAmount)) {
-            return true;
-        }
+        const finalApplied = readAppliedClicks(finalStates);
+        if (Number.isFinite(finalApplied) && finalApplied >= clickCount) return true;
         return waitForAllSeatBetAmountsExactly(expectations);
     }
 
@@ -748,7 +756,7 @@
                 }
                 const observedStates = readSeatAmountsForExpectations(expectations);
                 const observed = formatObservedSeatStates(observedStates);
-                if (areObservedStatesSafelyAtExpectedByChipCount(observedStates, chipValue, 1)) {
+                if (areObservedStatesSafelyAtExpectedAmount(observedStates, chipValue, 1)) {
                     console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by chip-count inference (${observed})`);
                     clicked = true;
                     break;
@@ -766,7 +774,7 @@
                     await sleep(BET_NO_EFFECT_RECHECK_MS);
                     const recheckedStates = readSeatAmountsForExpectations(expectations);
                     const rechecked = formatObservedSeatStates(recheckedStates);
-                    if (areObservedStatesSafelyAtExpectedByChipCount(recheckedStates, chipValue, 1)) {
+                    if (areObservedStatesSafelyAtExpectedAmount(recheckedStates, chipValue, 1)) {
                         console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by delayed chip-count inference (${rechecked})`);
                         clicked = true;
                         break;

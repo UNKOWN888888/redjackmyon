@@ -126,6 +126,36 @@
                 console.warn(`[AutoTrigger] 요청 좌석 ${requestedSeats}개 중 실제/기억 좌석 ${targetSeatNumbers.length}개로 최선 진행`);
             }
 
+            let closeVerifiedSeatNumbers = getCloseVerifiedSeatNumbers(targetSeatNumbers);
+            if (closeVerifiedSeatNumbers.length < targetSeatNumbers.length) {
+                await waitForCondition(() => {
+                    closeVerifiedSeatNumbers = getCloseVerifiedSeatNumbers(targetSeatNumbers);
+                    return closeVerifiedSeatNumbers.length === targetSeatNumbers.length;
+                }, 220, VERIFY_POLL_MS);
+                closeVerifiedSeatNumbers = getCloseVerifiedSeatNumbers(targetSeatNumbers);
+            }
+            if (closeVerifiedSeatNumbers.length <= 0) {
+                failReason = 'no_close_verified_seats_before_plan';
+                console.warn('[AutoTrigger] close-icon으로 확인된 실제 좌석이 없어 칩 베팅 중단');
+                pushBetLog('error', 'no_close_verified_seats_before_plan', {
+                    candidates: targetSeatNumbers.join(','),
+                });
+                return false;
+            }
+            if (closeVerifiedSeatNumbers.length !== targetSeatNumbers.length) {
+                console.warn(`[AutoTrigger] 좌석 계획 ${targetSeatNumbers.length}개 → close-icon 실제 ${closeVerifiedSeatNumbers.length}개로 재계산`);
+                pushBetLog('warn', 'seat_plan_shrunk_to_close_verified', {
+                    planned: targetSeatNumbers.join(','),
+                    actual: closeVerifiedSeatNumbers.join(','),
+                });
+                targetSeatNumbers = closeVerifiedSeatNumbers;
+                seatLimitOverride = targetSeatNumbers.length;
+                rememberTargetSeatNumbers(targetSeatNumbers, {
+                    allowShrink: true,
+                    reason: 'close_verified_before_plan',
+                });
+            }
+
             let plan = getSeatPlan(targetSeatNumbers.length, availableChips);
             if (plan.used > 0 && plan.used < targetSeatNumbers.length) {
                 targetSeatNumbers = targetSeatNumbers.slice(0, plan.used);
@@ -299,6 +329,14 @@
                     seats: lastTargetSeatNumbers.join(','),
                     perSeat: formatMoney(plan.perSeatActual),
                     chipPlan: formatChipPlan(plan.chipPlan),
+                });
+                return false;
+            }
+            if (!verifyWalletTotalBeforeAutoplayStart(plan, 'bet_setup_final')) {
+                failReason = lastFailReason || 'wallet_total_mismatch_after_setup';
+                pushBetLog('error', 'bet_setup_wallet_total_not_exact', {
+                    planned: formatMoney(plan.totalActual),
+                    target: formatMoney(TARGET_BET_AMOUNT),
                 });
                 return false;
             }
