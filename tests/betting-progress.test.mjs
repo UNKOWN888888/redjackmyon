@@ -122,6 +122,21 @@ assert.equal(seatInferenceSandbox.canInferSeatAmountFromPlan(unknownSingleVisual
   perSeatActual: 1500,
   chipPlan: [{ value: 1500, count: 1 }],
 }), true);
+seatInferenceSandbox.uniqueSortedSeatNumbers = numbers => [...new Set(numbers)].sort((a, b) => a - b);
+seatInferenceSandbox.getMaxSeatCount = () => 1;
+seatInferenceSandbox.toInt = value => Number(value);
+seatInferenceSandbox.getSeatByNumber = seatNumber => ({ seatNumber });
+seatInferenceSandbox.getSeatBetState = () => unknownSingleVisualChip;
+seatInferenceSandbox.hasGhostChip = () => false;
+const inferredSummary = seatInferenceSandbox.getTargetSeatBetSummary([5], {
+  used: 1,
+  totalActual: 1500,
+  perSeatActual: 1500,
+  chipPlan: [{ value: 1500, count: 1 }],
+});
+assert.equal(inferredSummary.amounts[0].amount, null, 'plan inference must not become a detected monetary amount');
+assert.equal(inferredSummary.amounts[0].inferredAmount, 1500);
+assert.equal(inferredSummary.ambiguousCount, 1);
 
 {
   let sentClicks = 0;
@@ -172,6 +187,70 @@ assert.equal(seatInferenceSandbox.canInferSeatAmountFromPlan(unknownSingleVisual
   assert.equal(await batchSandbox.clickMainBetChipBroadcastBatchVerified([5, 7], 750, 2, 1500), true);
   assert.equal(sentClicks, 2, '750 x2 plan must dispatch two verified broadcast clicks');
   assert.equal(walletAmount, 3000);
+
+  batchSandbox.getBroadcastSeatTargetState = numbers => ({
+    targets: numbers,
+    live: [3, ...numbers],
+    missing: [],
+    extra: [3],
+    exact: false,
+  });
+  const clicksBeforeMismatch = sentClicks;
+  assert.equal(await batchSandbox.clickMainBetChipBroadcastBatchVerified([5, 7], 750, 2, 1500), false);
+  assert.equal(sentClicks, clicksBeforeMismatch, 'an extra live seat must block before dispatching another chip click');
+}
+
+{
+  let walletAmount = 3000;
+  let sentClicks = 0;
+  const seats = new Map([[5, { seatNumber: 5 }], [7, { seatNumber: 7 }]]);
+  const continuationSandbox = loadPartial('09-betting-clicks.js', {
+    BET_CLICK_RETRY_LIMIT: 0,
+    BET_NO_EFFECT_RETRY_LIMIT: 0,
+    BET_CLICK_VERIFY_MS: 0,
+    BET_NO_EFFECT_RECHECK_MS: 0,
+    VERIFY_POLL_MS: 1,
+    SEAT_CLICK_DELAY_MS: 0,
+    uniqueSortedSeatNumbers: numbers => [...new Set(numbers)].sort((a, b) => a - b),
+    getSeatByNumber: number => seats.get(number) || null,
+    getSeatBetState: () => ({ amountDetected: false, amount: null, hasChip: true, chipCount: 2 }),
+    getSeatDisplayedBetAmount: () => null,
+    getWalletTotalBetReading: () => ({ detected: true, ambiguous: false, amount: walletAmount }),
+    getBroadcastSeatTargetState: numbers => ({ targets: numbers, live: numbers, missing: [], extra: [], exact: true }),
+    isVisible: () => true,
+    isDisabledLike: () => false,
+    isScriptStopped: () => false,
+    closeBetBlockingBottomSheetIfOpen: async () => false,
+    getSeatBetClickElement: seat => seat,
+    getSeatBetClickCandidates: seat => [seat],
+    getElementLabel: () => 'seat',
+    getBetClickProbeLabel: () => 'seat',
+    markBetClickDebug: () => {},
+    markBetClickGuard: () => {},
+    pushBetLog: () => {},
+    formatMoney: String,
+    getSelectedChipAmount: () => 750,
+    getRememberedSelectedStackChipAmount: () => 0,
+    robustBetClick: () => {
+      sentClicks++;
+      walletAmount += 1500;
+      return true;
+    },
+    sleep: async () => {},
+    waitForCondition: async fn => fn(),
+    hasGhostChip: () => false,
+    Date,
+  });
+
+  assert.equal(await continuationSandbox.clickMainBetChipBroadcastVerified(
+    [5, 7],
+    750,
+    1,
+    2250,
+    { expectedBasePerSeatAmount: 1500, expectedWalletBaseAmount: 3000 },
+  ), true, 'verified wallet baseline must allow the next denomination when seat text is temporarily unreadable');
+  assert.equal(sentClicks, 1);
+  assert.equal(walletAmount, 4500);
 }
 
 const hardCap = [state({ observedAmount: 1500, expectedAmount: 1500, hasGhost: false })];

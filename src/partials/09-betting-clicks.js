@@ -47,7 +47,14 @@
             target: getElementLabel(chip),
             available: detectAvailableChips().map(c => formatMoney(c.value)).join(','),
         });
-        robustClick(chip);
+        const selectionClickSent = robustClick(chip);
+        if (!selectionClickSent) {
+            pushBetLog('error', 'select_chip_dispatch_failed', {
+                planned: formatMoney(chipValue),
+                target: getElementLabel(chip),
+            });
+            return false;
+        }
         const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
             (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
         await sleep(CLICK_DELAY_MS);
@@ -270,9 +277,42 @@
         return Number.isFinite(walletClicks) ? walletClicks : null;
     }
 
+    function isWalletReadingExactAmount(reading, expectedAmount) {
+        return !!reading &&
+            reading.detected &&
+            !reading.ambiguous &&
+            Number.isFinite(reading.amount) &&
+            reading.amount === expectedAmount;
+    }
+
+    function isWalletReadingOverBroadcastCap(reading, maxPerSeatAmount, seatCount) {
+        if (!reading?.detected || reading.ambiguous || !Number.isFinite(reading.amount)) return false;
+        if (!Number.isFinite(maxPerSeatAmount) || !Number.isFinite(seatCount) || seatCount <= 0) return false;
+        return reading.amount > maxPerSeatAmount * seatCount;
+    }
+
+    function verifyBroadcastSeatTargetsBeforeClick(seatNumbers, context) {
+        if (typeof getBroadcastSeatTargetState !== 'function') return true;
+        const state = getBroadcastSeatTargetState(seatNumbers);
+        if (state.exact) return true;
+        if (typeof lastFailReason !== 'undefined') lastFailReason = 'broadcast_seat_set_mismatch';
+        pushBetLog('error', 'broadcast_seat_set_mismatch', {
+            context,
+            targets: state.targets.join(','),
+            live: state.live.join(','),
+            missing: state.missing.join(','),
+            extra: state.extra.join(','),
+            reserved: state.reserved?.join(',') || '',
+            unresolvedReserved: state.unresolvedReserved?.join(',') || '',
+        });
+        console.warn(`[AutoTrigger] broadcast seat set mismatch (${context}): target=${state.targets.join(',') || 'none'} live=${state.live.join(',') || 'none'}`);
+        return false;
+    }
+
     async function clickSingleSeatChipVerified(seatNumber, chipValue, maxPerSeatAmount = Infinity) {
         for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
             if (isScriptStopped()) return false;
+            if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
             const seat = getSeatByNumber(seatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     pushBetLog('error', 'individual_seat_not_ready', { seat: seatNumber, chip: formatMoney(chipValue) });
@@ -347,10 +387,6 @@
                 console.log(`[AutoTrigger] individual chip=${chipValue} verified by chip-count inference`);
                 return true;
             }
-            if (areObservedStatesSafelyAtSingleChipTarget([observed], chipValue, maxPerSeatAmount)) {
-                console.log(`[AutoTrigger] individual chip=${chipValue} verified by visible single-chip target inference`);
-                return true;
-            }
             if (areObservedStatesUnchangedSafe([observed])) {
                 await sleep(BET_NO_EFFECT_RECHECK_MS);
                 const [rechecked] = readSeatAmountsForExpectations([{
@@ -361,10 +397,6 @@
                 }]);
                 if (areObservedStatesSafelyAtExpectedAmount([rechecked], chipValue, 1)) {
                     console.log(`[AutoTrigger] individual chip=${chipValue} verified by delayed chip-count inference`);
-                    return true;
-                }
-                if (areObservedStatesSafelyAtSingleChipTarget([rechecked], chipValue, maxPerSeatAmount)) {
-                    console.log(`[AutoTrigger] individual chip=${chipValue} verified by delayed visible single-chip inference`);
                     return true;
                 }
                 if (canRetryNoEffectBetClick([rechecked], attempt)) {
@@ -436,9 +468,10 @@
         return false;
     }
 
-    async function clickMainBetChipBroadcastBatchVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity) {
+    async function clickMainBetChipBroadcastBatchVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity, options = {}) {
         const targets = uniqueSortedSeatNumbers(seatNumbers);
         if (targets.length <= 0 || clickCount <= 1) return false;
+        if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'batch_start')) return false;
 
         const clickSeatNumber = getFirstClickableBetSeatNumber(targets);
         if (clickSeatNumber === null) {
@@ -451,11 +484,35 @@
             return false;
         }
 
+        const expectedBasePerSeatAmount = Number.isFinite(options.expectedBasePerSeatAmount)
+            ? options.expectedBasePerSeatAmount
+            : null;
+        const expectedWalletBaseAmount = Number.isFinite(options.expectedWalletBaseAmount)
+            ? options.expectedWalletBaseAmount
+            : null;
+        const walletBaseReading = typeof getWalletTotalBetReading === 'function'
+            ? getWalletTotalBetReading()
+            : null;
+        if (
+            expectedWalletBaseAmount !== null &&
+            !isWalletReadingExactAmount(walletBaseReading, expectedWalletBaseAmount)
+        ) {
+            pushBetLog('error', 'broadcast_wallet_baseline_mismatch', {
+                expected: formatMoney(expectedWalletBaseAmount),
+                actual: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                ambiguous: walletBaseReading?.ambiguous ? 'Y' : 'N',
+            });
+            return false;
+        }
+
         const expectations = [];
         for (const n of targets) {
             const baseSeat = getSeatByNumber(n);
             const baseState = getSeatBetState(baseSeat);
-            const baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+            let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+            if (baseAmount === null && expectedBasePerSeatAmount !== null) {
+                baseAmount = expectedBasePerSeatAmount;
+            }
             if (baseAmount === null) {
                 pushBetLog('error', 'broadcast_base_unknown', {
                     seat: n,
@@ -464,6 +521,14 @@
                     chipCount: baseState.chipCount,
                 });
                 console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip batch chip click`);
+                return false;
+            }
+            if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+                pushBetLog('error', 'broadcast_seat_baseline_mismatch', {
+                    seat: n,
+                    expected: formatMoney(expectedBasePerSeatAmount),
+                    actual: formatMoney(baseAmount),
+                });
                 return false;
             }
             const expectedAmount = baseAmount + chipValue * clickCount;
@@ -487,9 +552,6 @@
             });
         }
 
-        const walletBaseReading = typeof getWalletTotalBetReading === 'function'
-            ? getWalletTotalBetReading()
-            : null;
         const readAppliedClicks = states => getVerifiedBroadcastAppliedClicks(
             states,
             walletBaseReading,
@@ -504,6 +566,16 @@
             if (isScriptStopped()) return false;
 
             const beforeStates = readSeatAmountsForExpectations(expectations);
+            const walletBeforeProgress = typeof getWalletTotalBetReading === 'function'
+                ? getWalletTotalBetReading()
+                : null;
+            if (isWalletReadingOverBroadcastCap(walletBeforeProgress, maxPerSeatAmount, targets.length)) {
+                pushBetLog('error', 'broadcast_wallet_over_cap_before_progress', {
+                    actual: formatMoney(walletBeforeProgress.amount),
+                    cap: formatMoney(maxPerSeatAmount * targets.length),
+                });
+                return false;
+            }
             const alreadyApplied = readAppliedClicks(beforeStates);
             if (Number.isFinite(alreadyApplied) && alreadyApplied > appliedClicks) {
                 appliedClicks = alreadyApplied;
@@ -514,12 +586,14 @@
             let progressed = false;
             for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
                 if (isScriptStopped()) return false;
+                if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
                 const seat = getSeatByNumber(clickSeatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     console.warn(`[AutoTrigger] broadcast batch click seat ${clickSeatNumber} not ready`);
                     return false;
                 }
                 await closeBetBlockingBottomSheetIfOpen('broadcast_batch_bet_click');
+                if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'batch_click')) return false;
 
                 const target = getSeatBetClickElement(seat, attempt);
                 const targetTag = getElementLabel(target);
@@ -561,6 +635,21 @@
 
                 const observedStates = readSeatAmountsForExpectations(expectations);
                 const observed = formatObservedSeatStates(observedStates);
+                const walletAfterClick = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (isWalletReadingOverBroadcastCap(walletAfterClick, maxPerSeatAmount, targets.length)) {
+                    pushBetLog('error', 'broadcast_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                        observed,
+                    });
+                    markBetClickGuard('broadcast_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                    });
+                    return false;
+                }
                 const observedApplied = readAppliedClicks(observedStates);
                 if (Number.isFinite(observedApplied) && observedApplied >= nextApplied) {
                     appliedClicks = observedApplied;
@@ -645,14 +734,19 @@
         }
 
         const finalStates = readSeatAmountsForExpectations(expectations);
+        const finalWalletReading = typeof getWalletTotalBetReading === 'function'
+            ? getWalletTotalBetReading()
+            : null;
+        if (isWalletReadingOverBroadcastCap(finalWalletReading, maxPerSeatAmount, targets.length)) return false;
         const finalApplied = readAppliedClicks(finalStates);
         if (Number.isFinite(finalApplied) && finalApplied >= clickCount) return true;
         return waitForAllSeatBetAmountsExactly(expectations);
     }
 
-    async function clickMainBetChipBroadcastVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity) {
+    async function clickMainBetChipBroadcastVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity, options = {}) {
         const targets = uniqueSortedSeatNumbers(seatNumbers);
         if (targets.length <= 0) return false;
+        if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'single_start')) return false;
         if (Number.isFinite(maxPerSeatAmount) && areSeatsAlreadyAtAmount(targets, maxPerSeatAmount)) {
             console.log(`[AutoTrigger] seats already at ${formatMoney(maxPerSeatAmount)}; skip broadcast chip=${chipValue}`);
             return true;
@@ -668,7 +762,7 @@
         }
 
         if (clickCount > 1) {
-            return clickMainBetChipBroadcastBatchVerified(targets, chipValue, clickCount, maxPerSeatAmount);
+            return clickMainBetChipBroadcastBatchVerified(targets, chipValue, clickCount, maxPerSeatAmount, options);
         }
 
         for (let i = 0; i < clickCount; i++) {
@@ -678,6 +772,7 @@
             let clicked = false;
             for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
                 if (isScriptStopped()) return false;
+                if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
                 const seat = getSeatByNumber(clickSeatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     pushBetLog('error', 'broadcast_single_seat_not_ready', {
@@ -688,11 +783,35 @@
                     return false;
                 }
                 await closeBetBlockingBottomSheetIfOpen('broadcast_single_bet_click');
+                if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'single_click')) return false;
+                const expectedBasePerSeatAmount = Number.isFinite(options.expectedBasePerSeatAmount)
+                    ? options.expectedBasePerSeatAmount + chipValue * i
+                    : null;
+                const expectedWalletBaseAmount = Number.isFinite(options.expectedWalletBaseAmount)
+                    ? options.expectedWalletBaseAmount + chipValue * i * targets.length
+                    : null;
+                const walletBaseReading = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (
+                    expectedWalletBaseAmount !== null &&
+                    !isWalletReadingExactAmount(walletBaseReading, expectedWalletBaseAmount)
+                ) {
+                    pushBetLog('error', 'broadcast_single_wallet_baseline_mismatch', {
+                        expected: formatMoney(expectedWalletBaseAmount),
+                        actual: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                        ambiguous: walletBaseReading?.ambiguous ? 'Y' : 'N',
+                    });
+                    return false;
+                }
                 const expectations = [];
                 for (const n of targets) {
                     const baseSeat = getSeatByNumber(n);
                     const baseState = getSeatBetState(baseSeat);
-                    const baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+                    let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+                    if (baseAmount === null && expectedBasePerSeatAmount !== null) {
+                        baseAmount = expectedBasePerSeatAmount;
+                    }
                     if (baseAmount === null) {
                         pushBetLog('error', 'broadcast_single_base_unknown', {
                             seat: n,
@@ -700,6 +819,14 @@
                             chipCount: baseState.chipCount,
                         });
                         console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip extra chip click`);
+                        return false;
+                    }
+                    if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+                        pushBetLog('error', 'broadcast_single_seat_baseline_mismatch', {
+                            seat: n,
+                            expected: formatMoney(expectedBasePerSeatAmount),
+                            actual: formatMoney(baseAmount),
+                        });
                         return false;
                     }
                     if (baseAmount + chipValue > maxPerSeatAmount) {
@@ -750,12 +877,39 @@
                 }
                 await sleep(SEAT_CLICK_DELAY_MS);
 
-                if (await waitForAllSeatBetAmountsExactly(expectations)) {
+                const seatAmountsExact = await waitForAllSeatBetAmountsExactly(expectations);
+                const observedStates = readSeatAmountsForExpectations(expectations);
+                const observed = formatObservedSeatStates(observedStates);
+                const walletAfterClick = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (isWalletReadingOverBroadcastCap(walletAfterClick, maxPerSeatAmount, targets.length)) {
+                    pushBetLog('error', 'broadcast_single_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                        observed,
+                    });
+                    markBetClickGuard('broadcast_single_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                    });
+                    return false;
+                }
+                const walletApplied = getWalletBroadcastAppliedClicks(
+                    walletBaseReading,
+                    walletAfterClick,
+                    chipValue,
+                    targets.length,
+                    1
+                );
+                if (walletApplied === 1) {
                     clicked = true;
                     break;
                 }
-                const observedStates = readSeatAmountsForExpectations(expectations);
-                const observed = formatObservedSeatStates(observedStates);
+                if (seatAmountsExact) {
+                    clicked = true;
+                    break;
+                }
                 if (areObservedStatesSafelyAtExpectedAmount(observedStates, chipValue, 1)) {
                     console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by chip-count inference (${observed})`);
                     clicked = true;
@@ -765,15 +919,24 @@
                     console.log(`[AutoTrigger] broadcast chip=${chipValue} reached hard cap (${observed})`);
                     return true;
                 }
-                if (areObservedStatesSafelyAtSingleChipTarget(observedStates, chipValue, maxPerSeatAmount)) {
-                    console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by visible single-chip target inference (${observed})`);
-                    clicked = true;
-                    break;
-                }
                 if (areObservedStatesUnchangedSafe(observedStates)) {
                     await sleep(BET_NO_EFFECT_RECHECK_MS);
                     const recheckedStates = readSeatAmountsForExpectations(expectations);
                     const rechecked = formatObservedSeatStates(recheckedStates);
+                    const walletRechecked = typeof getWalletTotalBetReading === 'function'
+                        ? getWalletTotalBetReading()
+                        : null;
+                    const delayedWalletApplied = getWalletBroadcastAppliedClicks(
+                        walletBaseReading,
+                        walletRechecked,
+                        chipValue,
+                        targets.length,
+                        1
+                    );
+                    if (delayedWalletApplied === 1) {
+                        clicked = true;
+                        break;
+                    }
                     if (areObservedStatesSafelyAtExpectedAmount(recheckedStates, chipValue, 1)) {
                         console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by delayed chip-count inference (${rechecked})`);
                         clicked = true;
@@ -782,11 +945,6 @@
                     if (areObservedStatesAtHardCap(recheckedStates, maxPerSeatAmount)) {
                         console.log(`[AutoTrigger] broadcast chip=${chipValue} reached hard cap after delayed read (${rechecked})`);
                         return true;
-                    }
-                    if (areObservedStatesSafelyAtSingleChipTarget(recheckedStates, chipValue, maxPerSeatAmount)) {
-                        console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by delayed visible single-chip inference (${rechecked})`);
-                        clicked = true;
-                        break;
                     }
                     if (canRetryNoEffectBetClick(recheckedStates, attempt)) {
                         pushBetLog('warn', 'broadcast_single_no_effect_retry', {

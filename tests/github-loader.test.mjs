@@ -90,6 +90,23 @@ assert.match(
   /https:\/\/raw\.githubusercontent\.com\/UNKOWN888888\/redjackmyon\/main\/dist\/blackjackT\.user\.js/,
 );
 
+{
+  const nonBlackjackRoot = {
+    getAttribute(name) {
+      if (name === 'data-build-number') return '900000-baccarat-staging';
+      return '';
+    },
+  };
+  const nonBlackjackDocument = {
+    querySelector(selector) {
+      if (selector === '#root[data-game-version],#root[data-build-number]') return nonBlackjackRoot;
+      if (selector === '[data-testid="game-grid-wrapper"],[data-testid^="seat_"]') return {};
+      return null;
+    },
+  };
+  assert.equal(api.isBlackjackGameDocument(nonBlackjackDocument), false, 'an explicitly non-blackjack build must not load even if it has seat-like DOM');
+}
+
 function makeValidRemoteSource(version = '9.9.9') {
   return `// ==UserScript==
 // @name Autoplay Auto Trigger

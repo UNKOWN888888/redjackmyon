@@ -14,13 +14,13 @@ assert.match(userscriptMeta, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
 assert.match(userscriptMeta, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
 assert.match(userscriptMeta, /@match\s+https:\/\/client\.fcxlljmmbqtczjya\.net\/\*/);
 
-function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } = {}) {
+function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, buildName = '811940-blackjackx-staging', seatGrid = false } = {}) {
   const attributes = new Set(alreadyActive ? ['data-autotrigger-script-active'] : []);
   const gameRoot = gameDocument
     ? {
         getAttribute(name) {
           if (name === 'data-game-version') return '3.2.51';
-          if (name === 'data-build-number') return '811940-blackjackx-staging';
+          if (name === 'data-build-number') return buildName;
           if (name === 'data-version') return '3.2.51 (26.6.13 registry)';
           return null;
         },
@@ -38,7 +38,7 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
     querySelector(selector) {
       if (selector === '#root[data-game-version],#root[data-build-number]') return gameRoot;
       if (selector === '#root') return gameRoot;
-      if (selector === '[data-testid="game-grid-wrapper"],[data-testid^="seat_"]') return null;
+      if (selector === '[data-testid="game-grid-wrapper"],[data-testid^="seat_"]') return seatGrid ? {} : null;
       return null;
     },
   };
@@ -77,6 +77,17 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
 }
 
 {
+  const { context, attributes } = runBoot({
+    gameDocument: true,
+    iframe: false,
+    buildName: '900000-baccarat-staging',
+    seatGrid: true,
+  });
+  assert.equal(context.__bootResult, undefined);
+  assert.equal(attributes.has('data-autotrigger-script-active'), false);
+}
+
+{
   const { context } = runBoot({ gameDocument: true, iframe: true, alreadyActive: true });
   assert.equal(context.__bootResult, undefined);
 }
@@ -109,13 +120,84 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
 }
 
 {
+  let bettingWindowOpen = true;
+  const memory = loadPartial('02-diagnostics.js', {
+    Date,
+    lastTargetSeatNumbers: [5, 7],
+    lastTargetSeatRememberedAt: Date.now(),
+    TARGET_SEAT_MEMORY_GUARD_MS: 300000,
+    isBetSetupRunning: false,
+    betSettingsDirty: true,
+    autoBetArmed: false,
+    lastRoundCountSeenAt: 0,
+    lastSeatPlan: { totalActual: 3000 },
+    lastAppliedBetSettingsKey: '',
+    _trustedRememberedSeatNumbersCache: null,
+    _trustedRememberedSeatNumbersCacheAt: 0,
+    _trustedRememberedSeatNumbersCacheKey: '',
+    TRUSTED_SEAT_MEMORY_CACHE_MS: 45,
+    forcedAutoSeatCount: null,
+    seatLimitOverride: null,
+    AUTO_SEAT_COUNT: true,
+    SEAT_COUNT: 2,
+    TARGET_BET_AMOUNT: 3000,
+    getMaxSeatCount: () => 2,
+    uniqueSortedSeatNumbers: numbers => [...new Set(numbers)].sort((a, b) => a - b),
+    isBettingWindowOpen: () => bettingWindowOpen,
+    GM_getValue: () => [],
+    GM_setValue: () => {},
+  });
+  memory.getLiveRememberedSeatEvidence = () => [5];
+
+  assert.equal(memory.getTrustedRememberedSeatNumbers().join(','), '5', 'betting window must keep only individually verified remembered seats');
+  memory.rememberTargetSeatNumbers([5], { reason: 'partial_live_refresh' });
+  assert.equal(memory.lastTargetSeatNumbers.join(','), '5,7', 'a partial live refresh must not erase the second active seat reservation');
+  bettingWindowOpen = false;
+  assert.equal(memory.getTrustedRememberedSeatNumbers().join(','), '5,7', 'a recent active-round memory may bridge transient hidden seat markers');
+}
+
+{
+  const seats = loadPartial('07-seats.js', {
+    lastTargetSeatNumbers: [5, 7],
+  });
+  seats.uniqueSortedSeatNumbers = numbers => [...new Set(numbers)].sort((a, b) => a - b);
+  seats.isForceSitPromptSeatActive = () => false;
+  seats.getPlannedSeatLimit = () => 2;
+  seats.isTargetSeatMemoryRecentlyActive = () => true;
+  seats.getLiveRememberedSeatEvidence = () => [5];
+  seats.getTrustedRememberedSeatNumbers = () => [5];
+  seats.getYellowSeatRayNumbers = () => [];
+  seats.getControlledOrPendingSeatNumbers = () => [5];
+
+  assert.equal(seats.getSeatReservationNumbers().join(','), '5,7');
+  assert.equal(seats.getNewEmptySeatBlockState(3).blocked, true, 'a transiently hidden remembered seat must block sitting a third seat');
+  assert.equal(seats.getNewEmptySeatBlockState(7).blocked, false, 'the missing remembered seat itself may be reacquired');
+}
+
+{
   const seats = loadPartial('07-seats.js', {});
+  const closeSeatNumbers = new Set([5, 7]);
   seats.uniqueSortedSeatNumbers = numbers => [...new Set(numbers)].sort((a, b) => a - b);
   seats.getSeatByNumber = seatNumber => ({ seatNumber });
+  seats.getSeatNumber = seat => seat.seatNumber;
+  seats.getVisibleMainBetSeats = () => [3, 5, 7].map(seatNumber => ({ seatNumber }));
+  seats.lastTargetSeatNumbers = [];
+  seats.getSeatReservationNumbers = () => [];
   seats.isVisible = () => true;
-  seats.hasSeatCloseButton = seat => seat.seatNumber === 5 || seat.seatNumber === 7;
+  seats.hasSeatCloseButton = seat => closeSeatNumbers.has(seat.seatNumber);
 
   assert.equal(seats.getCloseVerifiedSeatNumbers([3, 5, 7, 3]).join(','), '5,7');
+  assert.equal(seats.getBroadcastSeatTargetState([5, 7]).exact, true);
+  closeSeatNumbers.add(3);
+  assert.equal(seats.getBroadcastSeatTargetState([5, 7]).exact, false, 'an extra live seat must block broadcast betting');
+  closeSeatNumbers.delete(3);
+  closeSeatNumbers.delete(7);
+  seats.lastTargetSeatNumbers = [5, 7];
+  seats.getSeatReservationNumbers = () => [5, 7];
+  const hiddenReservedState = seats.getBroadcastSeatTargetState([5]);
+  assert.equal(hiddenReservedState.exact, false, 'a hidden recent seat reservation must block a one-seat broadcast plan');
+  assert.equal(hiddenReservedState.unresolvedReserved.join(','), '7');
+  closeSeatNumbers.add(7);
 
   const plan = {
     used: 2,
@@ -168,9 +250,52 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } =
     expected: 3000,
     reading: { detected: true, ambiguous: false, amount: 1500 },
   });
+  seats.isBettingWindowOpen = () => true;
+  seats.getTargetSeatBetSummary = () => ({
+    seats: [5, 7],
+    amounts: [
+      { seatNumber: 5, amount: 1500, hasChip: true, hasGhost: false },
+      { seatNumber: 7, amount: 1500, hasChip: true, hasGhost: false },
+    ],
+    total: 3000,
+    detectedCount: 2,
+    ambiguousCount: 0,
+  });
+  assert.equal(seats.areBetSeatsReadyForRoundAction(plan), false, 'displayed seat totals must not override an under-target wallet total');
+
+  seats.getTargetSeatBetSummary = () => unknownAmounts;
   const recovery = seats.getUnknownBetWalletRecovery(unknownAmounts, plan);
   assert.equal(recovery.recoverable, true);
+  assert.equal(recovery.reason, 'bet_amount_unknown_under_target');
   assert.equal(recovery.variance.reading.amount, 1500);
+
+  seats.getWalletTotalBetVariance = () => ({
+    status: 'increased',
+    expected: 3000,
+    reading: { detected: true, ambiguous: false, amount: 4500 },
+  });
+  const overRecovery = seats.getUnknownBetWalletRecovery(unknownAmounts, plan);
+  assert.equal(overRecovery.recoverable, true);
+  assert.equal(overRecovery.reason, 'bet_total_over_target');
+}
+
+{
+  const seats = loadPartial('07-seats.js', {
+    AUTO_SEAT_COUNT: true,
+    TARGET_BET_AMOUNT: 3000,
+  });
+  seats.uniqueSortedSeatNumbers = numbers => [...new Set(numbers)].sort((a, b) => a - b);
+  seats.isScriptStopped = () => false;
+  seats.isAutomationLocked = () => false;
+  seats.getMaxSeatCount = () => 4;
+  seats.getControlledSeatNumbers = () => [5, 7];
+  seats.getTrustedRememberedSeatNumbers = () => [];
+  seats.isBettingWindowOpen = () => true;
+  seats.detectAvailableChips = () => [{ value: 750 }];
+  seats.getSetupSeatCandidates = () => [{}, {}, {}];
+  seats.getSeatPlan = () => ({ used: 2, totalActual: 3000, perSeatActual: 1500, chipPlan: [{ value: 750, count: 2 }] });
+
+  assert.equal(seats.getAutoSeatExpansionOpportunity(), null, 'a third seat must not replace an exact two-seat plan with a lower total');
 }
 
 console.log('runtime compatibility tests passed');

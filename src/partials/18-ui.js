@@ -42,8 +42,24 @@
         const header = document.getElementById('at-header');
         makeDraggable(panel, header);
 
+        let settingsCommitTimer = null;
         const saveSettings = () => {
+            if (settingsCommitTimer !== null) {
+                clearTimeout(settingsCommitTimer);
+                settingsCommitTimer = null;
+            }
+            clearSettingsInputPending();
             syncSettingsFromUI();
+        };
+
+        const queueSettingsSave = () => {
+            markSettingsInputPending();
+            if (settingsCommitTimer !== null) clearTimeout(settingsCommitTimer);
+            settingsCommitTimer = setTimeout(() => {
+                settingsCommitTimer = null;
+                clearSettingsInputPending();
+                syncSettingsFromUI();
+            }, SETTINGS_INPUT_SETTLE_MS);
         };
 
         const updateScriptToggle = () => {
@@ -56,7 +72,7 @@
 
         document.getElementById('at-save').addEventListener('click', saveSettings);
         ['at-threshold', 'at-bet-amount', 'at-seat-count', 'at-auto-seat'].forEach(id => {
-            document.getElementById(id).addEventListener('input', saveSettings);
+            document.getElementById(id).addEventListener('input', queueSettingsSave);
             document.getElementById(id).addEventListener('change', saveSettings);
         });
 

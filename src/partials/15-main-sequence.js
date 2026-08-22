@@ -1,5 +1,6 @@
     // ========== 메인 시퀀스 ==========
     async function runSequence() {
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return;
         syncSettingsFromUI();
         if (isScriptStopped() || isRunning) return;
         if (isAutomationLocked()) {
@@ -33,8 +34,8 @@
                     console.warn('[AutoTrigger] visible chip exists but amount is unknown; recovery paused to avoid double betting');
                     return;
                 }
-                console.warn(`[AutoTrigger] 좌석 금액 미인식이지만 지갑 총액 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} 부족 확인 → 베팅 초기화 후 복구`);
-                markBetStateNeedsRecovery('bet_amount_unknown_under_target');
+                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 상태 ${recovery.variance.status} ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 베팅 초기화 후 복구`);
+                markBetStateNeedsRecovery(recovery.reason);
                 readyForRound = false;
             }
             if (readyForRound && !isBetSettingsApplied()) {
@@ -57,6 +58,14 @@
                 readyForRound = areBetSeatsReadyForRoundAction(expectedPlan);
                 await sleep(25);
                 if (isScriptStopped()) return;
+                if (!readyForRound) {
+                    lastFailReason = 'bet_not_ready_after_setup';
+                    pushBetLog('error', 'bet_not_ready_after_setup', {
+                        planned: formatMoney(expectedPlan.totalActual),
+                        seats: getRememberedBetSeatNumbers(expectedPlan.used).join(','),
+                    });
+                    return;
+                }
             } else if (readyForRound && betSettingsDirty && isBetSettingsApplied() && !betMismatch) {
                 console.log('[AutoTrigger] 자동베팅 횟수 인식만 지연됨: 칩 재세팅 없이 기존 베팅 상태 유지');
                 betSettingsDirty = false;

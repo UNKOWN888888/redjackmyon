@@ -36,23 +36,9 @@
     }
 
     function clickInsuranceNoElement(noBtn) {
-        const rect = noBtn.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        const targets = new Set([noBtn]);
-        const doc = noBtn.ownerDocument || document;
-        const topEl = doc.elementFromPoint?.(x, y);
-        if (topEl && noBtn.contains?.(topEl)) targets.add(topEl);
-        Array.from(noBtn.querySelectorAll?.('div,span,svg,path') || [])
-            .filter(isVisible)
-            .slice(0, 8)
-            .forEach(el => targets.add(el));
-        let clicked = false;
-        for (const target of targets) {
-            if (fireFullClick(target, x, y)) clicked = true;
-        }
-        if (!clicked) clicked = robustClick(noBtn);
-        return clicked;
+        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
+        const target = noBtn.closest?.('[data-id="no"]') || noBtn;
+        return robustClick(target);
     }
 
     function checkAndClickInsuranceNo() {

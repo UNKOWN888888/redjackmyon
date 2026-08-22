@@ -1,5 +1,6 @@
     // ========== 베팅 설정 ==========
     async function setupBetAmount(force = false) {
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
         syncSettingsFromUI();
         if (isScriptStopped()) return false;
         if (isAutomationLocked()) {
@@ -21,8 +22,18 @@
         isBetSetupRunning = true;
         let ok = false;
         let failReason = null;
+        const setupSettingsKey = getBetSettingsKey();
 
         try {
+            if (getVisibleDecisionPanelInfo().active) {
+                failReason = 'decision_panel_active_before_setup';
+                console.warn('[AutoTrigger] 의사결정 패널이 열린 상태에서는 베팅 설정을 시작하지 않음');
+                return false;
+            }
+            if (!isBettingWindowOpen()) {
+                failReason = 'betting_window_closed_before_setup';
+                return false;
+            }
             if (!(await stopAutoplayIfRunning())) { failReason = 'stop_autoplay'; return false; }
             if (isScriptStopped()) { failReason = 'stopped'; return false; }
 
@@ -67,6 +78,10 @@
             let resetExistingBet = false;
             for (const n of targetSeatNumbers) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
+                if (isSettingsInputPending() || getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
                 if (finalSeatNumbers.length >= targetSeatCount) break;
                 const seat = getSeatByNumber(n);
                 if (seat && isControlledSeatNumber(n)) {
@@ -157,6 +172,19 @@
                 });
             }
 
+            const initialBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            if (!initialBroadcastSeatState.exact) {
+                failReason = 'broadcast_seat_set_mismatch_before_plan';
+                pushBetLog('error', 'broadcast_seat_set_mismatch_before_plan', {
+                    targets: initialBroadcastSeatState.targets.join(','),
+                    live: initialBroadcastSeatState.live.join(','),
+                    missing: initialBroadcastSeatState.missing.join(','),
+                    extra: initialBroadcastSeatState.extra.join(','),
+                    unresolvedReserved: initialBroadcastSeatState.unresolvedReserved.join(','),
+                });
+                return false;
+            }
+
             let plan = getSeatPlan(targetSeatNumbers.length, availableChips);
             if (plan.used > 0 && plan.used < targetSeatNumbers.length) {
                 targetSeatNumbers = targetSeatNumbers.slice(0, plan.used);
@@ -198,15 +226,26 @@
 
             const currentBetSummary = getTargetSeatBetSummary(targetSeatNumbers, plan);
             if (isBetSummaryMatchingPlan(currentBetSummary, plan)) {
-                rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_existing_exact' });
-                console.log(`[AutoTrigger] existing bet already matches plan: 총 ${formatMoney(currentBetSummary.total)} / 좌석 ${targetSeatNumbers.join(',')}`);
-                pushBetLog('info', 'existing_bet_matches_plan', {
+                const existingWalletVariance = getWalletTotalBetVariance(plan);
+                if (existingWalletVariance.status === 'exact') {
+                    rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_existing_exact' });
+                    console.log(`[AutoTrigger] existing bet already matches plan: 총 ${formatMoney(currentBetSummary.total)} / 좌석 ${targetSeatNumbers.join(',')}`);
+                    pushBetLog('info', 'existing_bet_matches_plan', {
+                        seats: targetSeatNumbers.join(','),
+                        total: formatMoney(currentBetSummary.total),
+                        perSeat: formatMoney(plan.perSeatActual),
+                    });
+                    ok = true;
+                    return true;
+                }
+                pushBetLog('warn', 'existing_seat_amounts_match_wallet_mismatch', {
                     seats: targetSeatNumbers.join(','),
-                    total: formatMoney(currentBetSummary.total),
-                    perSeat: formatMoney(plan.perSeatActual),
+                    seatTotal: formatMoney(currentBetSummary.total),
+                    walletStatus: existingWalletVariance.status,
+                    wallet: Number.isFinite(existingWalletVariance.reading?.amount)
+                        ? formatMoney(existingWalletVariance.reading.amount)
+                        : 'unknown',
                 });
-                ok = true;
-                return true;
             }
             /*
             if (currentBetSummary.total > TARGET_BET_AMOUNT) {
@@ -223,6 +262,18 @@
                     seats: targetSeatNumbers.join(','),
                 });
             }
+
+            let walletBeforeReset = getWalletTotalBetReading();
+            if (!walletBeforeReset.detected || walletBeforeReset.ambiguous || !Number.isFinite(walletBeforeReset.amount)) {
+                failReason = walletBeforeReset.ambiguous
+                    ? 'wallet_total_ambiguous_before_setup'
+                    : 'wallet_total_missing_before_setup';
+                pushBetLog('error', failReason, {
+                    values: (walletBeforeReset.values || []).map(formatMoney).join(','),
+                });
+                return false;
+            }
+            let walletHasExistingBet = walletBeforeReset.amount > 0;
 
             for (const n of targetSeatNumbers) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
@@ -245,11 +296,13 @@
                         failReason = `resit_seat_${n}_unknown`;
                         return false;
                     }
+                    const walletAfterSeatReset = getWalletTotalBetReading();
+                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
                     continue;
                 }
 
                 const existing = existingState.amountDetected ? existingState.amount : 0;
-                if (existing > 0 || hasBetCloseBtn) {
+                if (existing > 0 || (walletHasExistingBet && hasBetCloseBtn)) {
                     const reasonLog = existing > 0
                         ? `existing bet ${formatMoney(existing)}`
                         : 'bet close button visible (chip exists but unrecognized)';
@@ -263,29 +316,47 @@
                         failReason = `resit_seat_${n}`;
                         return false;
                     }
+                    const walletAfterSeatReset = getWalletTotalBetReading();
+                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
                 }
             }
 
-            if (resetExistingBet) {
-                let walletAfterReset = getWalletTotalBetReading();
-                const walletResetConfirmed = await waitForCondition(() => {
-                    walletAfterReset = getWalletTotalBetReading();
-                    return walletAfterReset.detected &&
-                        !walletAfterReset.ambiguous &&
-                        walletAfterReset.amount === 0;
-                }, WALLET_RESET_VERIFY_MS, VERIFY_POLL_MS);
-                if (!walletResetConfirmed) {
-                    failReason = 'wallet_total_not_zero_before_setup';
-                    pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
-                        detected: walletAfterReset.detected ? 'Y' : 'N',
-                        ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
-                        amount: Number.isFinite(walletAfterReset.amount)
-                            ? formatMoney(walletAfterReset.amount)
-                            : 'unknown',
-                    });
-                    console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
-                    return false;
-                }
+            let walletAfterReset = getWalletTotalBetReading();
+            const walletResetConfirmed = isWalletReadingExactAmount(walletAfterReset, 0) || await waitForCondition(() => {
+                walletAfterReset = getWalletTotalBetReading();
+                return isWalletReadingExactAmount(walletAfterReset, 0);
+            }, resetExistingBet ? WALLET_RESET_VERIFY_MS : 120, VERIFY_POLL_MS);
+            if (!walletResetConfirmed) {
+                failReason = 'wallet_total_not_zero_before_setup';
+                pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
+                    detected: walletAfterReset.detected ? 'Y' : 'N',
+                    ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
+                    amount: Number.isFinite(walletAfterReset.amount)
+                        ? formatMoney(walletAfterReset.amount)
+                        : 'unknown',
+                });
+                console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
+                return false;
+            }
+
+            let finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            if (!finalBroadcastSeatState.exact) {
+                await waitForCondition(() => {
+                    finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+                    return finalBroadcastSeatState.exact;
+                }, 220, VERIFY_POLL_MS);
+                finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            }
+            if (!finalBroadcastSeatState.exact) {
+                failReason = 'broadcast_seat_set_mismatch_before_bet';
+                pushBetLog('error', 'broadcast_seat_set_mismatch_before_bet', {
+                    targets: finalBroadcastSeatState.targets.join(','),
+                    live: finalBroadcastSeatState.live.join(','),
+                    missing: finalBroadcastSeatState.missing.join(','),
+                    extra: finalBroadcastSeatState.extra.join(','),
+                    unresolvedReserved: finalBroadcastSeatState.unresolvedReserved.join(','),
+                });
+                return false;
             }
 
             // 칩별 외부 루프, 좌석별 내부 루프 (칩 선택 비용 최소화)
@@ -306,8 +377,13 @@
                 });
                 return false;
             }
+            let expectedAppliedPerSeat = 0;
             for (const spec of plan.chipPlan) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
+                if (getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
                 if (!(await selectChipByValue(spec.value))) {
                     failReason = `select_chip_${spec.value}`;
                     pushBetLog('error', 'setup_select_chip_failed', {
@@ -317,7 +393,20 @@
                     });
                     return false;
                 }
-                if (!(await clickMainBetChipBroadcastVerified(targetSeatNumbers, spec.value, spec.count, plan.perSeatActual))) {
+                if (isSettingsInputPending() || getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
+                if (!(await clickMainBetChipBroadcastVerified(
+                    targetSeatNumbers,
+                    spec.value,
+                    spec.count,
+                    plan.perSeatActual,
+                    {
+                        expectedBasePerSeatAmount: expectedAppliedPerSeat,
+                        expectedWalletBaseAmount: expectedAppliedPerSeat * targetSeatNumbers.length,
+                    }
+                ))) {
                     failReason = `broadcast_chip_${spec.value}`;
                     pushBetLog('error', 'setup_broadcast_chip_failed', {
                         chip: formatMoney(spec.value),
@@ -328,6 +417,7 @@
                     });
                     return false;
                 }
+                expectedAppliedPerSeat += spec.value * spec.count;
             }
 
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });

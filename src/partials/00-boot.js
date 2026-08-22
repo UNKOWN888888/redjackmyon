@@ -4,8 +4,8 @@
         if (!doc?.querySelector) return false;
         const root = doc.querySelector('#root[data-game-version],#root[data-build-number]');
         if (root) {
-            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`;
-            if (!build || /blackjackx/i.test(build)) return true;
+            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`.trim();
+            if (build) return /blackjackx/i.test(build);
         }
         return !!doc.querySelector('[data-testid="game-grid-wrapper"],[data-testid^="seat_"]');
     }

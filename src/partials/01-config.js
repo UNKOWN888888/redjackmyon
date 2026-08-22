@@ -11,6 +11,7 @@
     let SCRIPT_ENABLED = GM_getValue('scriptEnabled', true) !== false;
     const SAFETY_READ_ONLY_MODE = false;
     const AUTOPLAY_START_ROUNDS = 100;
+    const AUTOPLAY_MODIFY_STEP = 10;
     const CHECK_INTERVAL_MS = 80;
     const FAST_SEAT_CHECK_INTERVAL_MS = 30;
     const BET_CLOSE_ICON_SELECTOR = '[data-testid="bet-spot-close-icon-button"]';
@@ -38,6 +39,7 @@
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
     const AUTOPLAY_BUTTON_READY_WAIT_MS = 800;
     const AUTOPLAY_MENU_WAIT_MS = 800;
+    const AUTOPLAY_MODIFY_MENU_WAIT_MS = 500;
     const PENDING_SEAT_TTL_MS = 1600;
     const TARGET_SEAT_MEMORY_GUARD_MS = 300000;
     // [1.38] 자동 베팅 단독 재활성화 / 비활성 중단 팝업 자동 해제
@@ -60,6 +62,7 @@
     const SELECTED_STACK_CHIP_TTL_MS = 2500;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
     const AUTOPLAY_MODAL_IDLE_CLOSE_MS = 3000;
+    const SETTINGS_INPUT_SETTLE_MS = 300;
 
     let isRunning = false;
     let isBetSetupRunning = false;
@@ -123,6 +126,7 @@
     let lastSeatExpansionHandledAt = 0;
     const SEAT_EXPANSION_COOLDOWN_MS = 350;
     let forceSitPromptSeatUntil = 0;
+    let settingsInputPendingUntil = 0;
 
     // 마지막으로 감지된 가장 작은 칩값 (좌석 금액 텍스트 필터링용 캐시)
     let cachedMinChipValue = 1;

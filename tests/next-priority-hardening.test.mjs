@@ -101,6 +101,54 @@ function testRobustClickDispatchesButtonActionToSingleTarget() {
   assert.equal(sandbox.robustClick(targetButton), true);
   const clickedTargets = [topButton, targetButton].filter(el => el.dispatched.includes('click') || el.nativeClicked);
   assert.deepEqual(clickedTargets.map(el => el.name), ['targetButton']);
+  assert.equal(targetButton.nativeClicked, 1, 'a button action must invoke native click exactly once');
+  assert.equal(targetButton.dispatched.filter(type => type === 'click').length, 0, 'native click must not be preceded by a second synthetic click');
+  assert.equal(targetButton.dispatched.length, 0, 'native button actions must not also emit pointer or mouse actions');
+}
+
+function testBetClickRejectsOverlayOutsideSeatBoundary() {
+  const seat = makeElement('seat');
+  const overlay = makeElement('decisionOverlay');
+  attachDoc(seat, overlay);
+  seat.contains = other => other === seat;
+  overlay.closest = selector => selector.includes('[data-testid="bj-decision-panel"]') ? overlay : null;
+
+  const sandbox = loadPartial('04-clicks.js', {
+    console,
+    window: seat.ownerDocument.defaultView,
+    PointerEvent: seat.ownerDocument.defaultView.PointerEvent,
+    MouseEvent: seat.ownerDocument.defaultView.MouseEvent,
+    TouchEvent: seat.ownerDocument.defaultView.TouchEvent,
+    SEAT_CLOSE_ICON_SELECTOR: '[data-testid="seat-close"]',
+    isVisible: () => true,
+    invalidateDynamicCaches: noop,
+    lastBetClickDebug: '',
+    lastBetClickDebugAt: 0,
+    Date,
+  });
+
+  assert.equal(sandbox.isSafeBetDispatchTarget(overlay, seat), false);
+}
+
+function testInsuranceNoDispatchesOneAction() {
+  const noButton = makeElement('insuranceNo', { attrs: { 'data-id': 'no' } });
+  attachDoc(noButton);
+  noButton.textContent = '아니오';
+  noButton.closest = selector => selector.includes('[data-id="no"]') ? noButton : null;
+  let clickCount = 0;
+  const sandbox = loadPartial('12-deal-insurance.js', {
+    window: noButton.ownerDocument.defaultView,
+    isVisible: () => true,
+    isDisabledLike: () => false,
+    robustClick: target => {
+      assert.equal(target, noButton);
+      clickCount++;
+      return true;
+    },
+  });
+
+  assert.equal(sandbox.clickInsuranceNoElement(noButton), true);
+  assert.equal(clickCount, 1, 'insurance no must be dispatched once even when it has nested children');
 }
 
 function loadAutoplayDomSandbox(overrides = {}) {
@@ -119,7 +167,14 @@ function loadAutoplayDomSandbox(overrides = {}) {
     SIT_PROMPT_CACHE_MS: 0,
     STOP_AUTOPLAY_WAIT_MS: 50,
     AUTOPLAY_START_ROUNDS: 100,
+    AUTOPLAY_MODIFY_STEP: 10,
+    AUTOPLAY_MODIFY_MENU_WAIT_MS: 50,
     TARGET_BET_AMOUNT: 3000,
+    _roundNumberCacheAt: 0,
+    _roundNumberCache: null,
+    _autoplayButtonCacheAt: 0,
+    _autoplayButtonCache: null,
+    lastAutoplayModalActionAt: 0,
     toInt: (value, fallback, min, max) => {
       const n = parseInt(value, 10);
       return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
@@ -183,26 +238,62 @@ function testCloseAutoplayDialogDoesNotClickGlobalCloseWhenNoAutoplayModal() {
 
 async function testTopUpModifyFailsWhenFinalRoundStillBelowTarget() {
   const marker = makeElement('modifyMarker');
+  const addon = makeElement('modifyAddon10', { attrs: { 'data-testid': 'autoplay-modify-addon-10' } });
   const modifyButton = makeElement('modifyButton', { tag: 'BUTTON', attrs: { 'data-testid': 'autoplay-control-button' } });
   marker.closest = selector => selector.includes('button') ? modifyButton : null;
+  addon.parentElement = marker;
+  addon.closest = selector => selector.includes('autoplay-modify-button')
+    ? marker
+    : (selector.includes('button') ? modifyButton : null);
   const env = loadAutoplayDomSandbox();
-  env.setQsa('[data-testid="autoplay-modify-button"]', [marker]);
+  env.setQsa('[data-testid="autoplay-modify-addon-10"]', [addon]);
   env.setRoundNumber(95);
 
   assert.equal(await env.sandbox.topUpAutoplayRoundsByModify(95), false);
   assert.equal(env.clicked, 1, 'one modify click was attempted but must not count as success without target round verification');
 }
 
-async function testTopUpModifyBlocksWhenSafetyFailsBeforeClick() {
+async function testTopUpModifyIgnoresNewBetSafetyDuringRunningAutoplay() {
   const marker = makeElement('modifyMarker');
+  const addon = makeElement('modifyAddon10', { attrs: { 'data-testid': 'autoplay-modify-addon-10' } });
   const modifyButton = makeElement('modifyButton', { tag: 'BUTTON', attrs: { 'data-testid': 'autoplay-control-button' } });
   marker.closest = selector => selector.includes('button') ? modifyButton : null;
+  addon.parentElement = marker;
+  addon.closest = selector => selector.includes('autoplay-modify-button')
+    ? marker
+    : (selector.includes('button') ? modifyButton : null);
   const env = loadAutoplayDomSandbox({ bumpRoundOnClick: 100 });
-  env.setQsa('[data-testid="autoplay-modify-button"]', [marker]);
+  env.setQsa('[data-testid="autoplay-modify-addon-10"]', [addon]);
   env.sandbox.verifyAutoplayStartSafety = () => false;
 
-  assert.equal(await env.sandbox.topUpAutoplayRoundsByModify(95), false);
-  assert.equal(env.clicked, 0, 'modify must not click when safety check fails');
+  assert.equal(await env.sandbox.topUpAutoplayRoundsByModify(95), true);
+  assert.equal(env.clicked, 1, 'exact modify control should click even when current-hand wallet safety would reject a new bet');
+}
+
+function testRoundNumberReadsAutoplayStopSlider() {
+  const counter = makeElement('roundCounter', { attrs: { 'data-testid': 'number-slider-list-item' } });
+  counter.textContent = '98';
+  const env = loadAutoplayDomSandbox();
+  env.setQsa('[data-testid="autoplay-stop-button"] [data-testid="number-slider-list-item"]', [counter]);
+
+  assert.equal(env.sandbox.getRoundNumber(), 98, 'remaining rounds must be read from the running autoplay stop panel');
+}
+
+function testModifyButtonSelectsOnlyPlusTenControl() {
+  const plus2Button = makeElement('plus2Button', { tag: 'BUTTON', attrs: { 'data-testid': 'autoplay-control-button' } });
+  const plus10Button = makeElement('plus10Button', { tag: 'BUTTON', attrs: { 'data-testid': 'autoplay-control-button' } });
+  const plus10Marker = makeElement('plus10Marker', { attrs: { 'data-testid': 'autoplay-modify-button' } });
+  const plus10Addon = makeElement('plus10Addon', { attrs: { 'data-testid': 'autoplay-modify-addon-10' } });
+  plus10Addon.parentElement = plus10Marker;
+  plus10Addon.closest = selector => selector.includes('autoplay-modify-button')
+    ? plus10Marker
+    : (selector.includes('button') ? plus10Button : null);
+  const env = loadAutoplayDomSandbox();
+  env.setQsa('[data-testid="autoplay-modify-button"]', [makeElement('plus2Marker')]);
+  env.setQsa('[data-testid="autoplay-modify-addon-10"]', [plus10Addon]);
+  env.setQsa('button[data-testid="autoplay-control-button"]', [plus2Button, plus10Button]);
+
+  assert.equal(env.sandbox.getAutoplayModifyButton(), plus10Button, 'the first generic modify control (+2) must never be used as the +10 action');
 }
 
 function testBlockingPopupSkipsBodyFallbackAfterPrimaryClickDismissesPopup() {
@@ -232,10 +323,14 @@ function testBlockingPopupSkipsBodyFallbackAfterPrimaryClickDismissesPopup() {
 }
 
 testRobustClickDispatchesButtonActionToSingleTarget();
+testBetClickRejectsOverlayOutsideSeatBoundary();
+testInsuranceNoDispatchesOneAction();
 testBettingWindowRecognizesSingleChipAndStackButtons();
 testCloseAutoplayDialogDoesNotClickGlobalCloseWhenNoAutoplayModal();
 await testTopUpModifyFailsWhenFinalRoundStillBelowTarget();
-await testTopUpModifyBlocksWhenSafetyFailsBeforeClick();
+await testTopUpModifyIgnoresNewBetSafetyDuringRunningAutoplay();
+testRoundNumberReadsAutoplayStopSlider();
+testModifyButtonSelectsOnlyPlusTenControl();
 testBlockingPopupSkipsBodyFallbackAfterPrimaryClickDismissesPopup();
 
 console.log('next priority hardening regression tests passed');

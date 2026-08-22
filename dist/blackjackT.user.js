@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.87
-// @description  BlackjackX 3.2.51 게임 iframe에서도 실행하고 seat-taken-nickname으로 점유 좌석을 검증, 실행 정지/시작, 좌석/칩 베팅 속도 최적화, 자동베팅 버튼/100회 시작을 누르기 직전에 wallet-total-bet 및 wallet-mobile-total-bet의 총 베팅값을 판독해 계획 총액과 정확히 일치할 때만 진행하고 더블다운/스플릿 잔여 금액 등으로 총액이 다르면 자동베팅 시작을 차단하며 로그 내보내기에 지갑 총액 판독값 포함, 자동베팅 bottom-sheet modal이 자동베팅 시작/충전 작업 없이 3초 이상 열린 채 남아 있으면 idle 상태로 판단해 닫기 버튼을 자동 클릭하고 로그 기록, bottom-sheet-modal 래퍼가 감지되지 않는 자동베팅창도 autoplay-container/start/modify/stop 마커에서 부모 창과 닫기 버튼을 역추적해 자동 닫기, 자동베팅 bottom-sheet modal이 열린 상태에서 좌석/칩 베팅 클릭을 가로막는 문제를 막기 위해 베팅 직전에만 자동베팅 bottom-sheet를 닫고 robustBetClick이 modal 내부 요소를 좌석 클릭 대상으로 오인하지 않도록 차단, 좌석에 올라간 단일 칩이 DOM 조각 5개로 감지되는 로그 케이스를 반영해 7,500×1 계획에서 chipCount 1~8을 단일 칩으로 추정하여 베팅 성공/자동베팅 100회 단계로 진행, 기준미만 보충은 내부 div가 아닌 button[data-testid=autoplay-control-button]을 직접 클릭하고 보충 전후 라운드 로그 기록, 자동베팅 버튼/100회 시작/단독 재활성화/기준미만 재시작 실패 로그 강화, probe의 실제 hit-test 요소(div/span)가 mainbetSeat 경계 밖으로 판정되어 버려지던 문제를 수정해 베팅 좌표 위 실제 elementFromPoint 대상을 안전하면 직접 클릭, selected=unknown 상태의 chip-stack 선택 실패 가능성을 줄이도록 무반응 재시도 전에 계획 칩을 재선택, 베팅 스팟 클릭을 touch/mouse 단일 프로필로 분리해 무반응일 때만 제한적으로 대체 프로필을 재시도하고 칩이 조금이라도 감지되면 즉시 가드로 중복 베팅 차단, 실패 로그를 최근 200개까지 보관하고 UI의 "로그 내보내기" 버튼으로 설정/좌석/칩/계획/최근 로그 JSON 파일 다운로드 지원, 베팅 스팟 robustBetClick을 다중 좌표×다중 타겟 발사에서 단일 클릭 발사로 변경해 한 번의 의도된 베팅이 여러 칩으로 들어가는 과베팅 경로 차단, 베팅 클릭 후 금액 검증이 안 되면 2.2초 가드로 재클릭/재세팅을 막고 금액 미인식 칩이 보이는 동안 dirty 상태와 관계없이 복구를 멈춰 중복 베팅 방지, 베팅 가능 DOM의 mainbetSeat_N/ghost-chip/svg를 mainbet_N보다 먼저 클릭하고 실패 로그에 후보목록/probe 좌표를 기록해 좌석 베팅 클릭 누락 원인을 즉시 확인, 칩 선택 버튼은 native click까지 병행해 chip-stack 선택 안정화, 칩 선택/좌석 클릭/검증 실패 원인을 상태 패널에 최근 5개 표시해 선택칩/계획칩/좌석/타겟/관측금액/하드캡 차단 사유를 즉시 확인, chip-stack-value 선언값을 텍스트보다 우선해 7,500 계획이 60,000 칩 버튼으로 오인되는 문제를 차단하고 좌석 클릭 직전 선택칩/계획칩/좌석당 한도를 재검증해 총액 초과 과베팅 방지, 750×2/750×4 같은 동일칩 다중 베팅은 원래 기준금액을 유지한 채 1클릭 단위 진행률을 칩 개수/금액으로 즉시 확인하고 부족분만 빠르게 보충해 동시 클릭 누락 방지, 트레이/스택/전체 chip DOM을 병합 감지해 750/1500 최소칩 변동에도 정확금액 우선 + 클릭 수 최소 조합으로 계산, 칩 자동 감지 + 총 베팅금액 기준 좌석수/칩 자동 계산(초과 금지), 인슈어런스 "아니오"는 bj-decision-panel 안의 div[data-id=no]를 40ms 별도 감시 루프로 텍스트 의존 없이 raw div/내부 자식까지 즉시 클릭, 기준미만 자동베팅 보충 시 실행 중이면 stop 버튼을 누르지 않고 autoplay-modify-button(+10) control 버튼만 직접 클릭해 100회까지 보충, seat_N DOM 분석 기반으로 mainbetSeat_N 내부 ghost-chip/svg를 최우선 클릭하고 raw child + ancestor 양쪽에 이벤트를 발사해 실제 베팅 스팟 클릭 누락 방지, ghost placeholder만 보이는 무반응 상태는 다음 베팅 영역으로 빠르게 재시도, 좌석 칩 금액 텍스트가 숨겨진 경우에도 계획 좌석/칩 조합이 정확히 맞으면 금액을 추정해 자동베팅 클릭 차단 방지, 실제 좌석 칩 얼굴 텍스트는 읽고 일반 UI 숫자는 제외해 7,500 오인식/미인식 동시 방지, 이미 목표 베팅금액이면 추가 칩 클릭 없이 즉시 완료 처리, 선택 불가 칩값은 실제 칩 조합으로 분해, 고객지원 확인 팝업 새로고침 후 베팅/오토100 복구, chips_missing 중에도 좌석 우선 착석 후 칩 대기, seat_N/mainbetSeat_N 이중 기준으로 1~7번 빈시트 재검수, 빈시트 오인 pending 즉시 해제와 실제 빈자리 마커 우선 착석, 자리에 앉으십시오 감지 시 실제 미착석이면 stale 좌석기억 해제 후 즉시 착석, seat_N 내부 close-icon 기반 내 좌석 검증, 베팅 중 내 좌석 기억 고정으로 순간 감지 누락 시 3좌석 오착석 방지, 빠른 루프 경량화와 좌석기억 캐시로 전체 속도 개선, 좌석 close와 베팅 close 분리, "자리에 앉으십시오" 즉시 착석 트리거, 좌석 추가 발생 시 자동베팅 취소 후 재분배, 빈자리 자동 탐색(1~7), 자동 베팅 100회 보충, "지금 딜" 자동 클릭, "비활성 중단" 팝업 자동 해제, 자동 베팅만 꺼진 경우 베팅 재설정 없이 단독 재활성화. iframe + React + Touch + 오버레이 대응.
+// @version      1.88
+// @description  BlackjackX 좌석·칩·자동베팅 자동화. 실제 close-icon 좌석 집합과 지갑 총액을 매 클릭마다 검증하고, 중복 클릭·추정금액 오판·추가좌석 브로드캐스트·의사결정 패널 오클릭·입력 중간값 실행을 차단합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
 // @updateURL    https://raw.githubusercontent.com/UNKOWN888888/redjackmyon/main/dist/blackjackT.user.js
@@ -24,8 +24,8 @@
         if (!doc?.querySelector) return false;
         const root = doc.querySelector('#root[data-game-version],#root[data-build-number]');
         if (root) {
-            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`;
-            if (!build || /blackjackx/i.test(build)) return true;
+            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`.trim();
+            if (build) return /blackjackx/i.test(build);
         }
         return !!doc.querySelector('[data-testid="game-grid-wrapper"],[data-testid^="seat_"]');
     }
@@ -80,6 +80,7 @@
     let SCRIPT_ENABLED = GM_getValue('scriptEnabled', true) !== false;
     const SAFETY_READ_ONLY_MODE = false;
     const AUTOPLAY_START_ROUNDS = 100;
+    const AUTOPLAY_MODIFY_STEP = 10;
     const CHECK_INTERVAL_MS = 80;
     const FAST_SEAT_CHECK_INTERVAL_MS = 30;
     const BET_CLOSE_ICON_SELECTOR = '[data-testid="bet-spot-close-icon-button"]';
@@ -107,6 +108,7 @@
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
     const AUTOPLAY_BUTTON_READY_WAIT_MS = 800;
     const AUTOPLAY_MENU_WAIT_MS = 800;
+    const AUTOPLAY_MODIFY_MENU_WAIT_MS = 500;
     const PENDING_SEAT_TTL_MS = 1600;
     const TARGET_SEAT_MEMORY_GUARD_MS = 300000;
     // [1.38] 자동 베팅 단독 재활성화 / 비활성 중단 팝업 자동 해제
@@ -129,6 +131,7 @@
     const SELECTED_STACK_CHIP_TTL_MS = 2500;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
     const AUTOPLAY_MODAL_IDLE_CLOSE_MS = 3000;
+    const SETTINGS_INPUT_SETTLE_MS = 300;
 
     let isRunning = false;
     let isBetSetupRunning = false;
@@ -192,6 +195,7 @@
     let lastSeatExpansionHandledAt = 0;
     const SEAT_EXPANSION_COOLDOWN_MS = 350;
     let forceSitPromptSeatUntil = 0;
+    let settingsInputPendingUntil = 0;
 
     // 마지막으로 감지된 가장 작은 칩값 (좌석 금액 텍스트 필터링용 캐시)
     let cachedMinChipValue = 1;
@@ -510,10 +514,7 @@
         return seatNumber !== null && getLiveRememberedSeatEvidence([seatNumber]).includes(seatNumber);
     }
 
-    function isTargetSeatMemoryTrusted(numbers = lastTargetSeatNumbers) {
-        const remembered = uniqueSortedSeatNumbers(numbers);
-        if (remembered.length <= 0) return false;
-
+    function isTargetSeatMemoryRecentlyActive() {
         const recentlyConfirmed = lastTargetSeatRememberedAt > 0 &&
             Date.now() - lastTargetSeatRememberedAt <= TARGET_SEAT_MEMORY_GUARD_MS;
         const activeBetContext = isBetSetupRunning ||
@@ -522,17 +523,29 @@
             isBetSettingsApplied() ||
             (lastRoundCountSeenAt > 0 && Date.now() - lastRoundCountSeenAt <= TARGET_SEAT_MEMORY_GUARD_MS) ||
             (lastSeatPlan?.totalActual || 0) > 0;
+        return recentlyConfirmed && activeBetContext;
+    }
 
-        if (recentlyConfirmed && activeBetContext) return true;
-        return getLiveRememberedSeatEvidence(remembered).length > 0;
+    function isTargetSeatMemoryTrusted(numbers = lastTargetSeatNumbers) {
+        const remembered = uniqueSortedSeatNumbers(numbers);
+        if (remembered.length <= 0) return false;
+
+        const liveEvidence = getLiveRememberedSeatEvidence(remembered);
+        const bettingWindowOpen = typeof isBettingWindowOpen === 'function' && isBettingWindowOpen();
+        if (!bettingWindowOpen && isTargetSeatMemoryRecentlyActive()) return true;
+        return liveEvidence.length === remembered.length;
     }
 
     function getTrustedRememberedSeatNumbers() {
         const now = Date.now();
         const limit = getPlannedSeatLimit();
         const remembered = uniqueSortedSeatNumbers(lastTargetSeatNumbers).slice(0, limit);
+        const liveEvidence = getLiveRememberedSeatEvidence(remembered);
+        const bettingWindowOpen = typeof isBettingWindowOpen === 'function' && isBettingWindowOpen();
         const cacheKey = [
             remembered.join(','),
+            liveEvidence.join(','),
+            bettingWindowOpen ? 1 : 0,
             limit,
             lastTargetSeatRememberedAt,
             lastAppliedBetSettingsKey,
@@ -550,9 +563,8 @@
             return _trustedRememberedSeatNumbersCache;
         }
 
-        const value = remembered.length > 0 && isTargetSeatMemoryTrusted(remembered)
-            ? remembered
-            : [];
+        const preserveRecentRoundMemory = !bettingWindowOpen && isTargetSeatMemoryRecentlyActive();
+        const value = preserveRecentRoundMemory ? remembered : liveEvidence;
         _trustedRememberedSeatNumbersCache = value;
         _trustedRememberedSeatNumbersCacheAt = now;
         _trustedRememberedSeatNumbersCacheKey = cacheKey;
@@ -566,9 +578,14 @@
         const allowShrink = !!options.allowShrink;
         const refresh = options.refresh !== false;
         const memoryTrusted = isTargetSeatMemoryTrusted(previous);
+        const partialLiveRefresh = !allowShrink &&
+            incoming.length > 0 &&
+            incoming.length < previous.length &&
+            incoming.every(n => previous.includes(n)) &&
+            isTargetSeatMemoryRecentlyActive();
 
         let next = incoming;
-        if (!allowShrink && memoryTrusted && previous.length > 0) {
+        if (!allowShrink && (memoryTrusted || partialLiveRefresh) && previous.length > 0) {
             const merged = [];
             for (const n of previous) {
                 if (!merged.includes(n) && merged.length < limit) merged.push(n);
@@ -611,6 +628,18 @@
     function markBetSettingsApplied() {
         lastAppliedBetSettingsKey = getBetSettingsKey();
         GM_setValue('lastAppliedBetSettingsKey', lastAppliedBetSettingsKey);
+    }
+
+    function markSettingsInputPending() {
+        settingsInputPendingUntil = Date.now() + SETTINGS_INPUT_SETTLE_MS;
+    }
+
+    function clearSettingsInputPending() {
+        settingsInputPendingUntil = 0;
+    }
+
+    function isSettingsInputPending() {
+        return settingsInputPendingUntil > Date.now();
     }
 
     function syncSettingsFromUI() {
@@ -657,12 +686,12 @@
     }
 
     function markBetStateNeedsRecovery(reason) {
-        if (Date.now() - lastRecoveryAt < AUTOBET_RECOVERY_COOLDOWN_MS) return false;
         autoBetArmed = false;
         betSettingsDirty = true;
         lastBetSetupAt = 0;
-        lastRecoveryAt = Date.now();
         lastFailReason = reason;
+        if (Date.now() - lastRecoveryAt < AUTOBET_RECOVERY_COOLDOWN_MS) return false;
+        lastRecoveryAt = Date.now();
         console.warn(`[AutoTrigger] ${reason} → 베팅 상태 복구 예약`);
         return true;
     }
@@ -694,6 +723,7 @@
             'bet_amount_not_detected_current',
             'bet_amount_not_detected_after_setup',
             'bet_amount_unknown_under_target',
+            'bet_amount_unknown_unverified',
             'wallet_total_not_zero_before_setup',
             'bet_total_over_target',
             'bet_total_over_target_after_setup',
@@ -725,6 +755,7 @@
         seatLimitOverride = null;
         forcedAutoSeatCount = null;
         forceSitPromptSeatUntil = 0;
+        clearSettingsInputPending();
         lastSeatPlan = emptyPlan();
         clearRememberedSeatNumbers();
         betSettingsDirty = true;
@@ -838,6 +869,10 @@
         };
         const pointerBase = { ...base, pointerId: 1, pointerType: isTouchProfile ? 'touch' : 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 };
         try {
+            if (options.nativeClick && typeof element.click === 'function') {
+                element.click();
+                return true;
+            }
             element.dispatchEvent(new PE('pointerover',  pointerBase));
             element.dispatchEvent(new PE('pointerenter', pointerBase));
             if (useMouse) {
@@ -859,10 +894,8 @@
             }
             element.dispatchEvent(new PE('pointerup',  { ...pointerBase, buttons: 0, pressure: 0 }));
             if (useMouse) element.dispatchEvent(new ME('mouseup', { ...base, buttons: 0 }));
-            element.dispatchEvent(new ME('click',      { ...base, buttons: 0 }));
-            if (options.nativeClick && typeof element.click === 'function') {
-                try { element.click(); } catch (_) {}
-            }
+
+            element.dispatchEvent(new ME('click', { ...base, buttons: 0 }));
             return true;
         } catch (e) {
             console.warn('[AutoTrigger] fireFullClick failed', e);
@@ -989,8 +1022,16 @@
         if (element.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return null;
         const candidate = element.closest?.('[data-testid^="seat_"],[data-testid^="mainbet_"],[data-testid^="mainbetSeat_"],[data-testid="chip"],[role="button"]') || element;
         if (candidate.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return null;
-        if (boundary && !(boundary.contains?.(candidate) || candidate.contains?.(boundary))) return element;
+        if (boundary && !boundary.contains?.(candidate)) return null;
         return candidate;
+    }
+
+    function getBetClickBoundary(element) {
+        if (!element) return null;
+        return element.closest?.('[data-testid^="mainbet_"]') ||
+            element.closest?.('[data-testid^="mainbetSeat_"]') ||
+            element.closest?.('[data-testid^="seat_"]') ||
+            element;
     }
 
     function addSafeBetClickTarget(targets, el, boundary = null) {
@@ -1016,11 +1057,13 @@
         }
     }
 
-    function isSafeBetDispatchTarget(el) {
+    function isSafeBetDispatchTarget(el, boundary = null) {
         if (!el || !isVisible(el)) return false;
+        if (boundary && !boundary.contains?.(el)) return false;
         if (el.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return false;
         if (el.closest?.('#at-panel')) return false;
         if (el.closest?.('[data-testid="bottom-sheet-modal"],[data-testid="modal-header"],[data-testid="modal-body"]')) return false;
+        if (el.closest?.('[data-testid="bj-decision-panel"],[data-testid="popup-content"],[data-testid="blocking-popup-content"]')) return false;
         if (el.closest?.('button[data-testid^="chip-stack-value-"]')) return false;
         if (el.closest?.('[data-testid="autoplay-button"],[data-testid="autoplay-control-button"]')) return false;
         return true;
@@ -1030,6 +1073,7 @@
         if (!element || !isVisible(element)) return false;
         const points = getSafeBetClickPoints(element);
         const doc = element.ownerDocument || document;
+        const boundary = getBetClickBoundary(element);
         const attempt = Math.max(0, Math.floor(options.attempt || 0));
         const profile = options.profile || getBetClickProfile(attempt);
         const orderedPoints = points.length > 0
@@ -1040,12 +1084,11 @@
             const topEl = doc.elementFromPoint?.(x, y);
             const candidates = [
                 topEl,
-                normalizeBetClickTarget(topEl, null),
-                normalizeBetClickTarget(topEl, element),
-                normalizeBetClickTarget(element, element),
+                normalizeBetClickTarget(topEl, boundary),
+                normalizeBetClickTarget(element, boundary),
                 element,
             ];
-            const target = candidates.find(isSafeBetDispatchTarget);
+            const target = candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary));
             if (!target) continue;
 
             if (lastBetClickDebug && Date.now() - lastBetClickDebugAt < 1000 && !/\sp\d+\/t\d+/.test(lastBetClickDebug)) {
@@ -1068,20 +1111,43 @@
     }
 
     // ========== 라운드/오토 버튼 ==========
+    function parseAutoplayRoundCounter(el) {
+        if (!el || !isVisible(el)) return null;
+        const text = String(el.textContent || '').trim();
+        if (!/^\d+$/.test(text)) return null;
+        const value = parseInt(text, 10);
+        return Number.isFinite(value) && value >= 0 ? value : null;
+    }
+
     function getRoundNumber() {
         const now = Date.now();
         if (_roundNumberCacheAt > 0 && now - _roundNumberCacheAt < DOM_MICRO_CACHE_MS) {
             return _roundNumberCache;
         }
-        const btn = getAutoplayButton();
-        const text = (btn?.textContent || '').trim();
-        if (!/^\d+$/.test(text)) {
-            _roundNumberCache = null;
-            _roundNumberCacheAt = now;
-            return null;
+
+        const counterSelectors = [
+            '[data-testid="autoplay-stop-button"] [data-testid="number-slider-list-item"]',
+            'button[data-testid="autoplay-button"] [data-testid="number-slider-list-item"]',
+        ];
+        for (const selector of counterSelectors) {
+            for (const counter of qsaDeep(selector)) {
+                const value = parseAutoplayRoundCounter(counter);
+                if (value === null) continue;
+                _roundNumberCache = value;
+                _roundNumberCacheAt = now;
+                return value;
+            }
         }
-        const value = parseInt(text, 10);
-        _roundNumberCache = Number.isFinite(value) && value > 0 ? value : null;
+
+        const btn = getAutoplayButton();
+        const nestedCounter = btn?.querySelector?.('[data-testid="number-slider-list-item"]');
+        const nestedValue = parseAutoplayRoundCounter(nestedCounter);
+        if (nestedValue !== null) {
+            _roundNumberCache = nestedValue;
+            _roundNumberCacheAt = now;
+            return nestedValue;
+        }
+        _roundNumberCache = parseAutoplayRoundCounter(btn);
         _roundNumberCacheAt = now;
         return _roundNumberCache;
     }
@@ -1134,26 +1200,45 @@
     }
 
     function getAutoplayModifyButton() {
-        for (const marker of qsaDeep('[data-testid="autoplay-modify-button"]')) {
-            const control = marker.closest?.('button[data-testid="autoplay-control-button"]') || marker.closest?.('button');
-            if (control && isVisible(control) && !isDisabledLike(control) && marker && isVisible(marker)) return control;
+        const addonSelector = `[data-testid="autoplay-modify-addon-${AUTOPLAY_MODIFY_STEP}"]`;
+        for (const addon of qsaDeep(addonSelector)) {
+            const marker = addon.closest?.('[data-testid="autoplay-modify-button"]') || addon.parentElement;
+            const control = addon.closest?.('button[data-testid="autoplay-control-button"]') || addon.closest?.('button');
+            if (control && marker && isVisible(addon) && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
         }
         for (const control of qsaDeep('button[data-testid="autoplay-control-button"]')) {
-            const marker = control.querySelector?.('[data-testid="autoplay-modify-button"]');
-            if (marker && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
+            const addon = control.querySelector?.(addonSelector);
+            const marker = addon?.closest?.('[data-testid="autoplay-modify-button"]') || addon?.parentElement;
+            if (addon && marker && isVisible(addon) && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
         }
         return null;
     }
 
+    async function getOrOpenAutoplayModifyButton() {
+        let modifyBtn = getAutoplayModifyButton();
+        if (modifyBtn) return modifyBtn;
+
+        const autoplayBtn = getAutoplayButton();
+        if (!autoplayBtn || !isVisible(autoplayBtn) || isDisabledLike(autoplayBtn)) return null;
+        pushBetLog('info', 'threshold_modify_menu_open', {
+            target: getElementLabel(autoplayBtn),
+            step: `+${AUTOPLAY_MODIFY_STEP}`,
+        });
+        markAutoplayModalAction();
+        if (!robustClick(autoplayBtn)) return null;
+        await waitForCondition(() => !!getAutoplayModifyButton(), AUTOPLAY_MODIFY_MENU_WAIT_MS, 20);
+        modifyBtn = getAutoplayModifyButton();
+        return modifyBtn;
+    }
+
     async function topUpAutoplayRoundsByModify(currentRoundNumber) {
         const missingRounds = Math.max(1, AUTOPLAY_START_ROUNDS - toInt(currentRoundNumber, AUTOPLAY_START_ROUNDS - 10, 0, AUTOPLAY_START_ROUNDS));
-        const clickCount = Math.max(1, Math.min(10, Math.ceil(missingRounds / 10)));
+        const clickCount = Math.max(1, Math.min(10, Math.ceil(missingRounds / AUTOPLAY_MODIFY_STEP)));
         let clicked = 0;
         let latestRound = Number.isFinite(currentRoundNumber) ? currentRoundNumber : observeAutoplayRoundNumber();
         for (let i = 0; i < clickCount; i++) {
             if (isScriptStopped()) return Number.isFinite(latestRound) && latestRound >= AUTOPLAY_START_ROUNDS;
-            if (!verifyAutoplayStartSafety(getExpectedBetPlan(), 'threshold_modify')) return false;
-            const modifyBtn = getAutoplayModifyButton();
+            const modifyBtn = await getOrOpenAutoplayModifyButton();
             if (!modifyBtn) {
                 lastFailReason = 'threshold_modify_btn_missing';
                 console.warn('[AutoTrigger] 기준미만 보충: autoplay modify 버튼 없음');
@@ -1165,7 +1250,15 @@
                 step: `${i + 1}/${clickCount}`,
                 target: getElementLabel(modifyBtn),
             });
-            robustClick(modifyBtn);
+            if (!robustClick(modifyBtn)) {
+                lastFailReason = 'threshold_modify_dispatch_failed';
+                pushBetLog('error', 'threshold_modify_dispatch_failed', {
+                    step: `${i + 1}/${clickCount}`,
+                    target: getElementLabel(modifyBtn),
+                });
+                return false;
+            }
+            markAutoplayModalAction();
             clicked++;
             await sleep(35);
             latestRound = observeAutoplayRoundNumber();
@@ -2006,9 +2099,21 @@
     function getKnownSeatNumbers() {
         if (isForceSitPromptSeatActive()) return [];
         return uniqueSortedSeatNumbers([
-            ...getTrustedRememberedSeatNumbers(),
+            ...getSeatReservationNumbers(),
             ...getYellowSeatRayNumbers(),
         ]);
+    }
+
+    function getSeatReservationNumbers() {
+        if (isForceSitPromptSeatActive()) return [];
+        const limit = getPlannedSeatLimit();
+        const remembered = uniqueSortedSeatNumbers(lastTargetSeatNumbers).slice(0, limit);
+        const hasRecentActiveMemory = typeof isTargetSeatMemoryRecentlyActive === 'function' &&
+            isTargetSeatMemoryRecentlyActive();
+        if (hasRecentActiveMemory && getLiveRememberedSeatEvidence(remembered).length > 0) {
+            return remembered;
+        }
+        return getTrustedRememberedSeatNumbers();
     }
 
     function isForceSitPromptSeatActive() {
@@ -2023,7 +2128,7 @@
         }
 
         const forceSeat = isForceSitPromptSeatActive();
-        const remembered = forceSeat ? [] : getTrustedRememberedSeatNumbers();
+        const remembered = forceSeat ? [] : getSeatReservationNumbers();
         const yellow = forceSeat ? [] : getYellowSeatRayNumbers();
         const known = uniqueSortedSeatNumbers([...remembered, ...yellow]);
         const candidate = normalizeSeatNumber(candidateNumber);
@@ -2162,6 +2267,36 @@
         });
     }
 
+    function getAllCloseVerifiedSeatNumbers() {
+        return uniqueSortedSeatNumbers(
+            getVisibleMainBetSeats()
+                .filter(seat => seat && isVisible(seat) && hasSeatCloseButton(seat))
+                .map(getSeatNumber)
+        );
+    }
+
+    function getBroadcastSeatTargetState(numbers) {
+        const targets = uniqueSortedSeatNumbers(numbers);
+        const live = getAllCloseVerifiedSeatNumbers();
+        const reserved = typeof lastTargetSeatNumbers !== 'undefined'
+            ? getSeatReservationNumbers()
+            : [];
+        const targetSet = new Set(targets);
+        const liveSet = new Set(live);
+        const missing = targets.filter(n => !liveSet.has(n));
+        const extra = live.filter(n => !targetSet.has(n));
+        const unresolvedReserved = reserved.filter(n => !targetSet.has(n) && !liveSet.has(n));
+        return {
+            targets,
+            live,
+            reserved,
+            missing,
+            extra,
+            unresolvedReserved,
+            exact: targets.length > 0 && missing.length === 0 && extra.length === 0 && unresolvedReserved.length === 0,
+        };
+    }
+
     function getControlledSeatNumbers() {
         return uniqueSortedSeatNumbers([
             ...getDirectVerifiedSeatNumbers(),
@@ -2206,10 +2341,11 @@
         const amounts = seats.map(n => {
             const state = getSeatBetState(getSeatByNumber(n));
             const inferred = allowPlanInference && canInferSeatAmountFromPlan(state, expectedPlan);
-            const amount = state.amountDetected ? state.amount : (inferred ? expectedPlan.perSeatActual : null);
+            const amount = state.amountDetected ? state.amount : null;
             return {
                 seatNumber: n,
                 amount,
+                inferredAmount: inferred ? expectedPlan.perSeatActual : null,
                 hasChip: state.hasChip,
                 chipCount: state.chipCount,
                 hasGhost: hasGhostChip(getSeatByNumber(n)),
@@ -2231,7 +2367,7 @@
     function isBetSummaryMatchingPlan(summary, plan) {
         const expected = Math.max(1, toInt(plan?.used, getMaxSeatCount(), 1, 7));
         if (!summary || !plan || plan.totalActual <= 0 || plan.perSeatActual <= 0) return false;
-        if (summary.seats.length < expected) return false;
+        if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
         if (summary.detectedCount < expected || summary.ambiguousCount > 0) return false;
         if (summary.total !== plan.totalActual) return false;
         return summary.amounts
@@ -2244,7 +2380,7 @@
         const expected = Math.max(1, toInt(plan?.used, getMaxSeatCount(), 1, 7));
         if (!summary || !plan || plan.totalActual <= 0 || plan.perSeatActual <= 0) return false;
         if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
-        if (getCloseVerifiedSeatNumbers(summary.seats).length !== expected) return false;
+        if (!getBroadcastSeatTargetState(summary.seats).exact) return false;
         if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
         return summary.amounts.every(item =>
             item.hasChip &&
@@ -2255,12 +2391,15 @@
 
     function getUnknownBetWalletRecovery(summary, plan) {
         const variance = getWalletTotalBetVariance(plan);
+        const recoverableStatuses = new Set(['under', 'increased', 'exact']);
         const recoverable = !!summary && summary.ambiguousCount > 0 &&
-            variance.status === 'under' &&
+            recoverableStatuses.has(variance.status) &&
             Number.isFinite(variance.reading?.amount) &&
-            variance.reading.amount >= 0 &&
-            variance.reading.amount < variance.expected;
-        return { recoverable, variance };
+            variance.reading.amount >= 0;
+        const reason = variance.status === 'increased'
+            ? 'bet_total_over_target'
+            : (variance.status === 'exact' ? 'bet_amount_unknown_unverified' : 'bet_amount_unknown_under_target');
+        return { recoverable, variance, reason };
     }
 
     function isTargetBetTotalOverLimit(numbers = getRememberedBetSeatNumbers()) {
@@ -2275,10 +2414,7 @@
             ...getControlledSeatNumbers(),
             ...getTrustedRememberedSeatNumbers(),
         ]);
-        const currentUsed = Math.max(
-            currentSeats.length,
-            Number.isFinite(lastSeatPlan?.used) ? lastSeatPlan.used : 0
-        );
+        const currentUsed = currentSeats.length;
         if (currentUsed <= 0 || currentUsed >= maxSeats) return null;
         if (!isBettingWindowOpen()) return null;
 
@@ -2291,7 +2427,7 @@
         const expandedSeatCount = Math.min(maxSeats, allSeats.length);
         if (expandedSeatCount <= currentUsed) return null;
 
-        const nextPlan = buildSeatPlanForCount(expandedSeatCount, maxSeats, allSeats.length, TARGET_BET_AMOUNT, availableChips);
+        const nextPlan = getSeatPlan(expandedSeatCount, availableChips);
         if (nextPlan.used <= currentUsed || nextPlan.used > maxSeats) return null;
         if (nextPlan.chipPlan.length === 0 || nextPlan.perSeatActual <= 0) return null;
 
@@ -2410,6 +2546,7 @@
 
     function handleImmediateSeatOpportunities(source = 'loop', phaseHint = null) {
         if (isScriptStopped() || isRunning || isBetSetupRunning || isAutomationLocked()) return false;
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
 
         const now = Date.now();
         const fastPromptOnly = source === 'fast';
@@ -2555,7 +2692,12 @@
         const amountsExact = summary.detectedCount >= expected &&
             summary.total === expectedPlan.totalActual &&
             summary.amounts.every(item => item.amount === expectedPlan.perSeatActual);
-        return amountsExact || isBetSummaryWalletConfirmed(summary, expectedPlan);
+        if (isBetSummaryWalletConfirmed(summary, expectedPlan)) return true;
+        if (!amountsExact) return false;
+
+        const walletVariance = getWalletTotalBetVariance(expectedPlan);
+        if (walletVariance.status === 'exact') return true;
+        return !isBettingWindowOpen() && walletVariance.status === 'missing';
     }
 
     function hasVisibleInScope(scope, selector) {
@@ -2591,7 +2733,10 @@
         return getSeatBeforeSitScore(seat) > 0;
     }
 
-    function hasGhostChip(seat) { return !!seat?.querySelector?.('[data-testid="ghostChip"],[data-testid="ghost-chip"]'); }
+    function hasGhostChip(seat) {
+        return Array.from(seat?.querySelectorAll?.('[data-testid="ghostChip"],[data-testid="ghost-chip"]') || [])
+            .some(isVisible);
+    }
 
     function getVisibleEmptySeatCandidates() {
         const map = new Map();
@@ -2687,6 +2832,17 @@
                 return true;
             }
             clearPendingSitSeat(seatNumber);
+            const freshSeat = getSeatByNumber(seatNumber);
+            if (
+                attempt < BET_CLICK_RETRY_LIMIT &&
+                freshSeat &&
+                isVisible(freshSeat) &&
+                !isSeatTakenByOther(freshSeat) &&
+                isSeatBeforeSit(freshSeat)
+            ) {
+                console.warn(`[AutoTrigger] seat ${seatNumber} sit click had no effect; retry ${attempt + 2}/${BET_CLICK_RETRY_LIMIT + 1}`);
+                continue;
+            }
             return false;
         }
         console.warn(`[AutoTrigger] seat ${seatNumber} sit failed`);
@@ -3094,24 +3250,37 @@
     async function closeExtraSeatedSeats(keepNumbers) {
         const keep = new Set(keepNumbers);
         let closed = 0;
-        const extraSeats = getBettableSeats().filter(s => isOwnSeat(s) && !keep.has(getSeatNumber(s)));
+        const getExtraSeats = () => getVisibleMainBetSeats()
+            .filter(s => isVerifiedOwnSeat(s) && !keep.has(getSeatNumber(s)));
+        const extraSeats = getExtraSeats();
         for (const seat of extraSeats) {
             if (isScriptStopped()) return false;
             const n = getSeatNumber(seat);
             const closeBtn = getSeatCloseButton(seat);
             if (!closeBtn || !isVisible(closeBtn)) {
                 console.warn(`[AutoTrigger] extra seat ${n} close button not found`);
-                continue;
+                return false;
             }
             robustClick(closeBtn);
             closed++;
             await sleep(EXTRA_SEAT_CLOSE_WAIT_MS);
         }
         if (closed > 0) {
-            await waitForCondition(() => {
-                return getBettableSeats().filter(s => isOwnSeat(s) && !keep.has(getSeatNumber(s))).length === 0;
-            }, 500, 30);
+            const allClosed = await waitForCondition(() => getExtraSeats().length === 0, 500, 30);
+            if (!allClosed) {
+                const remaining = getExtraSeats().map(getSeatNumber);
+                console.warn(`[AutoTrigger] extra seats still active after close: ${remaining.join(',') || 'unknown'}`);
+                pushBetLog('error', 'extra_seat_close_not_verified', {
+                    keep: Array.from(keep).join(','),
+                    remaining: remaining.join(','),
+                });
+                return false;
+            }
             console.log(`[AutoTrigger] closed extra seated: ${closed}`);
+            rememberTargetSeatNumbers(
+                lastTargetSeatNumbers.filter(n => keep.has(n)),
+                { allowShrink: true, reason: 'extra_seats_closed' }
+            );
         }
         return true;
     }
@@ -3163,7 +3332,7 @@
     function getSetupSeatCandidates() {
         const map = new Map();
         const remembered = uniqueSortedSeatNumbers([
-            ...getTrustedRememberedSeatNumbers(),
+            ...getSeatReservationNumbers(),
             ...getYellowSeatRayNumbers(),
             ...Array.from(pendingSitSeats.keys()),
         ]);
@@ -3295,7 +3464,14 @@
             target: getElementLabel(chip),
             available: detectAvailableChips().map(c => formatMoney(c.value)).join(','),
         });
-        robustClick(chip);
+        const selectionClickSent = robustClick(chip);
+        if (!selectionClickSent) {
+            pushBetLog('error', 'select_chip_dispatch_failed', {
+                planned: formatMoney(chipValue),
+                target: getElementLabel(chip),
+            });
+            return false;
+        }
         const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
             (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
         await sleep(CLICK_DELAY_MS);
@@ -3518,9 +3694,42 @@
         return Number.isFinite(walletClicks) ? walletClicks : null;
     }
 
+    function isWalletReadingExactAmount(reading, expectedAmount) {
+        return !!reading &&
+            reading.detected &&
+            !reading.ambiguous &&
+            Number.isFinite(reading.amount) &&
+            reading.amount === expectedAmount;
+    }
+
+    function isWalletReadingOverBroadcastCap(reading, maxPerSeatAmount, seatCount) {
+        if (!reading?.detected || reading.ambiguous || !Number.isFinite(reading.amount)) return false;
+        if (!Number.isFinite(maxPerSeatAmount) || !Number.isFinite(seatCount) || seatCount <= 0) return false;
+        return reading.amount > maxPerSeatAmount * seatCount;
+    }
+
+    function verifyBroadcastSeatTargetsBeforeClick(seatNumbers, context) {
+        if (typeof getBroadcastSeatTargetState !== 'function') return true;
+        const state = getBroadcastSeatTargetState(seatNumbers);
+        if (state.exact) return true;
+        if (typeof lastFailReason !== 'undefined') lastFailReason = 'broadcast_seat_set_mismatch';
+        pushBetLog('error', 'broadcast_seat_set_mismatch', {
+            context,
+            targets: state.targets.join(','),
+            live: state.live.join(','),
+            missing: state.missing.join(','),
+            extra: state.extra.join(','),
+            reserved: state.reserved?.join(',') || '',
+            unresolvedReserved: state.unresolvedReserved?.join(',') || '',
+        });
+        console.warn(`[AutoTrigger] broadcast seat set mismatch (${context}): target=${state.targets.join(',') || 'none'} live=${state.live.join(',') || 'none'}`);
+        return false;
+    }
+
     async function clickSingleSeatChipVerified(seatNumber, chipValue, maxPerSeatAmount = Infinity) {
         for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
             if (isScriptStopped()) return false;
+            if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
             const seat = getSeatByNumber(seatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     pushBetLog('error', 'individual_seat_not_ready', { seat: seatNumber, chip: formatMoney(chipValue) });
@@ -3595,10 +3804,6 @@
                 console.log(`[AutoTrigger] individual chip=${chipValue} verified by chip-count inference`);
                 return true;
             }
-            if (areObservedStatesSafelyAtSingleChipTarget([observed], chipValue, maxPerSeatAmount)) {
-                console.log(`[AutoTrigger] individual chip=${chipValue} verified by visible single-chip target inference`);
-                return true;
-            }
             if (areObservedStatesUnchangedSafe([observed])) {
                 await sleep(BET_NO_EFFECT_RECHECK_MS);
                 const [rechecked] = readSeatAmountsForExpectations([{
@@ -3609,10 +3814,6 @@
                 }]);
                 if (areObservedStatesSafelyAtExpectedAmount([rechecked], chipValue, 1)) {
                     console.log(`[AutoTrigger] individual chip=${chipValue} verified by delayed chip-count inference`);
-                    return true;
-                }
-                if (areObservedStatesSafelyAtSingleChipTarget([rechecked], chipValue, maxPerSeatAmount)) {
-                    console.log(`[AutoTrigger] individual chip=${chipValue} verified by delayed visible single-chip inference`);
                     return true;
                 }
                 if (canRetryNoEffectBetClick([rechecked], attempt)) {
@@ -3684,9 +3885,10 @@
         return false;
     }
 
-    async function clickMainBetChipBroadcastBatchVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity) {
+    async function clickMainBetChipBroadcastBatchVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity, options = {}) {
         const targets = uniqueSortedSeatNumbers(seatNumbers);
         if (targets.length <= 0 || clickCount <= 1) return false;
+        if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'batch_start')) return false;
 
         const clickSeatNumber = getFirstClickableBetSeatNumber(targets);
         if (clickSeatNumber === null) {
@@ -3699,11 +3901,35 @@
             return false;
         }
 
+        const expectedBasePerSeatAmount = Number.isFinite(options.expectedBasePerSeatAmount)
+            ? options.expectedBasePerSeatAmount
+            : null;
+        const expectedWalletBaseAmount = Number.isFinite(options.expectedWalletBaseAmount)
+            ? options.expectedWalletBaseAmount
+            : null;
+        const walletBaseReading = typeof getWalletTotalBetReading === 'function'
+            ? getWalletTotalBetReading()
+            : null;
+        if (
+            expectedWalletBaseAmount !== null &&
+            !isWalletReadingExactAmount(walletBaseReading, expectedWalletBaseAmount)
+        ) {
+            pushBetLog('error', 'broadcast_wallet_baseline_mismatch', {
+                expected: formatMoney(expectedWalletBaseAmount),
+                actual: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                ambiguous: walletBaseReading?.ambiguous ? 'Y' : 'N',
+            });
+            return false;
+        }
+
         const expectations = [];
         for (const n of targets) {
             const baseSeat = getSeatByNumber(n);
             const baseState = getSeatBetState(baseSeat);
-            const baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+            let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+            if (baseAmount === null && expectedBasePerSeatAmount !== null) {
+                baseAmount = expectedBasePerSeatAmount;
+            }
             if (baseAmount === null) {
                 pushBetLog('error', 'broadcast_base_unknown', {
                     seat: n,
@@ -3712,6 +3938,14 @@
                     chipCount: baseState.chipCount,
                 });
                 console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip batch chip click`);
+                return false;
+            }
+            if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+                pushBetLog('error', 'broadcast_seat_baseline_mismatch', {
+                    seat: n,
+                    expected: formatMoney(expectedBasePerSeatAmount),
+                    actual: formatMoney(baseAmount),
+                });
                 return false;
             }
             const expectedAmount = baseAmount + chipValue * clickCount;
@@ -3735,9 +3969,6 @@
             });
         }
 
-        const walletBaseReading = typeof getWalletTotalBetReading === 'function'
-            ? getWalletTotalBetReading()
-            : null;
         const readAppliedClicks = states => getVerifiedBroadcastAppliedClicks(
             states,
             walletBaseReading,
@@ -3752,6 +3983,16 @@
             if (isScriptStopped()) return false;
 
             const beforeStates = readSeatAmountsForExpectations(expectations);
+            const walletBeforeProgress = typeof getWalletTotalBetReading === 'function'
+                ? getWalletTotalBetReading()
+                : null;
+            if (isWalletReadingOverBroadcastCap(walletBeforeProgress, maxPerSeatAmount, targets.length)) {
+                pushBetLog('error', 'broadcast_wallet_over_cap_before_progress', {
+                    actual: formatMoney(walletBeforeProgress.amount),
+                    cap: formatMoney(maxPerSeatAmount * targets.length),
+                });
+                return false;
+            }
             const alreadyApplied = readAppliedClicks(beforeStates);
             if (Number.isFinite(alreadyApplied) && alreadyApplied > appliedClicks) {
                 appliedClicks = alreadyApplied;
@@ -3762,12 +4003,14 @@
             let progressed = false;
             for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
                 if (isScriptStopped()) return false;
+                if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
                 const seat = getSeatByNumber(clickSeatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     console.warn(`[AutoTrigger] broadcast batch click seat ${clickSeatNumber} not ready`);
                     return false;
                 }
                 await closeBetBlockingBottomSheetIfOpen('broadcast_batch_bet_click');
+                if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'batch_click')) return false;
 
                 const target = getSeatBetClickElement(seat, attempt);
                 const targetTag = getElementLabel(target);
@@ -3809,6 +4052,21 @@
 
                 const observedStates = readSeatAmountsForExpectations(expectations);
                 const observed = formatObservedSeatStates(observedStates);
+                const walletAfterClick = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (isWalletReadingOverBroadcastCap(walletAfterClick, maxPerSeatAmount, targets.length)) {
+                    pushBetLog('error', 'broadcast_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                        observed,
+                    });
+                    markBetClickGuard('broadcast_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                    });
+                    return false;
+                }
                 const observedApplied = readAppliedClicks(observedStates);
                 if (Number.isFinite(observedApplied) && observedApplied >= nextApplied) {
                     appliedClicks = observedApplied;
@@ -3893,14 +4151,19 @@
         }
 
         const finalStates = readSeatAmountsForExpectations(expectations);
+        const finalWalletReading = typeof getWalletTotalBetReading === 'function'
+            ? getWalletTotalBetReading()
+            : null;
+        if (isWalletReadingOverBroadcastCap(finalWalletReading, maxPerSeatAmount, targets.length)) return false;
         const finalApplied = readAppliedClicks(finalStates);
         if (Number.isFinite(finalApplied) && finalApplied >= clickCount) return true;
         return waitForAllSeatBetAmountsExactly(expectations);
     }
 
-    async function clickMainBetChipBroadcastVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity) {
+    async function clickMainBetChipBroadcastVerified(seatNumbers, chipValue, clickCount, maxPerSeatAmount = Infinity, options = {}) {
         const targets = uniqueSortedSeatNumbers(seatNumbers);
         if (targets.length <= 0) return false;
+        if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'single_start')) return false;
         if (Number.isFinite(maxPerSeatAmount) && areSeatsAlreadyAtAmount(targets, maxPerSeatAmount)) {
             console.log(`[AutoTrigger] seats already at ${formatMoney(maxPerSeatAmount)}; skip broadcast chip=${chipValue}`);
             return true;
@@ -3916,7 +4179,7 @@
         }
 
         if (clickCount > 1) {
-            return clickMainBetChipBroadcastBatchVerified(targets, chipValue, clickCount, maxPerSeatAmount);
+            return clickMainBetChipBroadcastBatchVerified(targets, chipValue, clickCount, maxPerSeatAmount, options);
         }
 
         for (let i = 0; i < clickCount; i++) {
@@ -3926,6 +4189,7 @@
             let clicked = false;
             for (let attempt = 0; attempt <= BET_CLICK_RETRY_LIMIT; attempt++) {
                 if (isScriptStopped()) return false;
+                if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
                 const seat = getSeatByNumber(clickSeatNumber);
                 if (!seat || !isVisible(seat) || isDisabledLike(seat)) {
                     pushBetLog('error', 'broadcast_single_seat_not_ready', {
@@ -3936,11 +4200,35 @@
                     return false;
                 }
                 await closeBetBlockingBottomSheetIfOpen('broadcast_single_bet_click');
+                if (!verifyBroadcastSeatTargetsBeforeClick(targets, 'single_click')) return false;
+                const expectedBasePerSeatAmount = Number.isFinite(options.expectedBasePerSeatAmount)
+                    ? options.expectedBasePerSeatAmount + chipValue * i
+                    : null;
+                const expectedWalletBaseAmount = Number.isFinite(options.expectedWalletBaseAmount)
+                    ? options.expectedWalletBaseAmount + chipValue * i * targets.length
+                    : null;
+                const walletBaseReading = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (
+                    expectedWalletBaseAmount !== null &&
+                    !isWalletReadingExactAmount(walletBaseReading, expectedWalletBaseAmount)
+                ) {
+                    pushBetLog('error', 'broadcast_single_wallet_baseline_mismatch', {
+                        expected: formatMoney(expectedWalletBaseAmount),
+                        actual: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                        ambiguous: walletBaseReading?.ambiguous ? 'Y' : 'N',
+                    });
+                    return false;
+                }
                 const expectations = [];
                 for (const n of targets) {
                     const baseSeat = getSeatByNumber(n);
                     const baseState = getSeatBetState(baseSeat);
-                    const baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+                    let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
+                    if (baseAmount === null && expectedBasePerSeatAmount !== null) {
+                        baseAmount = expectedBasePerSeatAmount;
+                    }
                     if (baseAmount === null) {
                         pushBetLog('error', 'broadcast_single_base_unknown', {
                             seat: n,
@@ -3948,6 +4236,14 @@
                             chipCount: baseState.chipCount,
                         });
                         console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip extra chip click`);
+                        return false;
+                    }
+                    if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+                        pushBetLog('error', 'broadcast_single_seat_baseline_mismatch', {
+                            seat: n,
+                            expected: formatMoney(expectedBasePerSeatAmount),
+                            actual: formatMoney(baseAmount),
+                        });
                         return false;
                     }
                     if (baseAmount + chipValue > maxPerSeatAmount) {
@@ -3998,12 +4294,39 @@
                 }
                 await sleep(SEAT_CLICK_DELAY_MS);
 
-                if (await waitForAllSeatBetAmountsExactly(expectations)) {
+                const seatAmountsExact = await waitForAllSeatBetAmountsExactly(expectations);
+                const observedStates = readSeatAmountsForExpectations(expectations);
+                const observed = formatObservedSeatStates(observedStates);
+                const walletAfterClick = typeof getWalletTotalBetReading === 'function'
+                    ? getWalletTotalBetReading()
+                    : null;
+                if (isWalletReadingOverBroadcastCap(walletAfterClick, maxPerSeatAmount, targets.length)) {
+                    pushBetLog('error', 'broadcast_single_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                        observed,
+                    });
+                    markBetClickGuard('broadcast_single_wallet_over_cap_after_click', {
+                        actual: formatMoney(walletAfterClick.amount),
+                        cap: formatMoney(maxPerSeatAmount * targets.length),
+                    });
+                    return false;
+                }
+                const walletApplied = getWalletBroadcastAppliedClicks(
+                    walletBaseReading,
+                    walletAfterClick,
+                    chipValue,
+                    targets.length,
+                    1
+                );
+                if (walletApplied === 1) {
                     clicked = true;
                     break;
                 }
-                const observedStates = readSeatAmountsForExpectations(expectations);
-                const observed = formatObservedSeatStates(observedStates);
+                if (seatAmountsExact) {
+                    clicked = true;
+                    break;
+                }
                 if (areObservedStatesSafelyAtExpectedAmount(observedStates, chipValue, 1)) {
                     console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by chip-count inference (${observed})`);
                     clicked = true;
@@ -4013,15 +4336,24 @@
                     console.log(`[AutoTrigger] broadcast chip=${chipValue} reached hard cap (${observed})`);
                     return true;
                 }
-                if (areObservedStatesSafelyAtSingleChipTarget(observedStates, chipValue, maxPerSeatAmount)) {
-                    console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by visible single-chip target inference (${observed})`);
-                    clicked = true;
-                    break;
-                }
                 if (areObservedStatesUnchangedSafe(observedStates)) {
                     await sleep(BET_NO_EFFECT_RECHECK_MS);
                     const recheckedStates = readSeatAmountsForExpectations(expectations);
                     const rechecked = formatObservedSeatStates(recheckedStates);
+                    const walletRechecked = typeof getWalletTotalBetReading === 'function'
+                        ? getWalletTotalBetReading()
+                        : null;
+                    const delayedWalletApplied = getWalletBroadcastAppliedClicks(
+                        walletBaseReading,
+                        walletRechecked,
+                        chipValue,
+                        targets.length,
+                        1
+                    );
+                    if (delayedWalletApplied === 1) {
+                        clicked = true;
+                        break;
+                    }
                     if (areObservedStatesSafelyAtExpectedAmount(recheckedStates, chipValue, 1)) {
                         console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by delayed chip-count inference (${rechecked})`);
                         clicked = true;
@@ -4030,11 +4362,6 @@
                     if (areObservedStatesAtHardCap(recheckedStates, maxPerSeatAmount)) {
                         console.log(`[AutoTrigger] broadcast chip=${chipValue} reached hard cap after delayed read (${rechecked})`);
                         return true;
-                    }
-                    if (areObservedStatesSafelyAtSingleChipTarget(recheckedStates, chipValue, maxPerSeatAmount)) {
-                        console.log(`[AutoTrigger] broadcast chip=${chipValue} verified by delayed visible single-chip inference (${rechecked})`);
-                        clicked = true;
-                        break;
                     }
                     if (canRetryNoEffectBetClick(recheckedStates, attempt)) {
                         pushBetLog('warn', 'broadcast_single_no_effect_retry', {
@@ -4146,6 +4473,7 @@
 
     // ========== 베팅 설정 ==========
     async function setupBetAmount(force = false) {
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
         syncSettingsFromUI();
         if (isScriptStopped()) return false;
         if (isAutomationLocked()) {
@@ -4167,8 +4495,18 @@
         isBetSetupRunning = true;
         let ok = false;
         let failReason = null;
+        const setupSettingsKey = getBetSettingsKey();
 
         try {
+            if (getVisibleDecisionPanelInfo().active) {
+                failReason = 'decision_panel_active_before_setup';
+                console.warn('[AutoTrigger] 의사결정 패널이 열린 상태에서는 베팅 설정을 시작하지 않음');
+                return false;
+            }
+            if (!isBettingWindowOpen()) {
+                failReason = 'betting_window_closed_before_setup';
+                return false;
+            }
             if (!(await stopAutoplayIfRunning())) { failReason = 'stop_autoplay'; return false; }
             if (isScriptStopped()) { failReason = 'stopped'; return false; }
 
@@ -4213,6 +4551,10 @@
             let resetExistingBet = false;
             for (const n of targetSeatNumbers) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
+                if (isSettingsInputPending() || getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
                 if (finalSeatNumbers.length >= targetSeatCount) break;
                 const seat = getSeatByNumber(n);
                 if (seat && isControlledSeatNumber(n)) {
@@ -4303,6 +4645,19 @@
                 });
             }
 
+            const initialBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            if (!initialBroadcastSeatState.exact) {
+                failReason = 'broadcast_seat_set_mismatch_before_plan';
+                pushBetLog('error', 'broadcast_seat_set_mismatch_before_plan', {
+                    targets: initialBroadcastSeatState.targets.join(','),
+                    live: initialBroadcastSeatState.live.join(','),
+                    missing: initialBroadcastSeatState.missing.join(','),
+                    extra: initialBroadcastSeatState.extra.join(','),
+                    unresolvedReserved: initialBroadcastSeatState.unresolvedReserved.join(','),
+                });
+                return false;
+            }
+
             let plan = getSeatPlan(targetSeatNumbers.length, availableChips);
             if (plan.used > 0 && plan.used < targetSeatNumbers.length) {
                 targetSeatNumbers = targetSeatNumbers.slice(0, plan.used);
@@ -4344,15 +4699,26 @@
 
             const currentBetSummary = getTargetSeatBetSummary(targetSeatNumbers, plan);
             if (isBetSummaryMatchingPlan(currentBetSummary, plan)) {
-                rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_existing_exact' });
-                console.log(`[AutoTrigger] existing bet already matches plan: 총 ${formatMoney(currentBetSummary.total)} / 좌석 ${targetSeatNumbers.join(',')}`);
-                pushBetLog('info', 'existing_bet_matches_plan', {
+                const existingWalletVariance = getWalletTotalBetVariance(plan);
+                if (existingWalletVariance.status === 'exact') {
+                    rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_existing_exact' });
+                    console.log(`[AutoTrigger] existing bet already matches plan: 총 ${formatMoney(currentBetSummary.total)} / 좌석 ${targetSeatNumbers.join(',')}`);
+                    pushBetLog('info', 'existing_bet_matches_plan', {
+                        seats: targetSeatNumbers.join(','),
+                        total: formatMoney(currentBetSummary.total),
+                        perSeat: formatMoney(plan.perSeatActual),
+                    });
+                    ok = true;
+                    return true;
+                }
+                pushBetLog('warn', 'existing_seat_amounts_match_wallet_mismatch', {
                     seats: targetSeatNumbers.join(','),
-                    total: formatMoney(currentBetSummary.total),
-                    perSeat: formatMoney(plan.perSeatActual),
+                    seatTotal: formatMoney(currentBetSummary.total),
+                    walletStatus: existingWalletVariance.status,
+                    wallet: Number.isFinite(existingWalletVariance.reading?.amount)
+                        ? formatMoney(existingWalletVariance.reading.amount)
+                        : 'unknown',
                 });
-                ok = true;
-                return true;
             }
             /*
             if (currentBetSummary.total > TARGET_BET_AMOUNT) {
@@ -4369,6 +4735,18 @@
                     seats: targetSeatNumbers.join(','),
                 });
             }
+
+            let walletBeforeReset = getWalletTotalBetReading();
+            if (!walletBeforeReset.detected || walletBeforeReset.ambiguous || !Number.isFinite(walletBeforeReset.amount)) {
+                failReason = walletBeforeReset.ambiguous
+                    ? 'wallet_total_ambiguous_before_setup'
+                    : 'wallet_total_missing_before_setup';
+                pushBetLog('error', failReason, {
+                    values: (walletBeforeReset.values || []).map(formatMoney).join(','),
+                });
+                return false;
+            }
+            let walletHasExistingBet = walletBeforeReset.amount > 0;
 
             for (const n of targetSeatNumbers) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
@@ -4391,11 +4769,13 @@
                         failReason = `resit_seat_${n}_unknown`;
                         return false;
                     }
+                    const walletAfterSeatReset = getWalletTotalBetReading();
+                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
                     continue;
                 }
 
                 const existing = existingState.amountDetected ? existingState.amount : 0;
-                if (existing > 0 || hasBetCloseBtn) {
+                if (existing > 0 || (walletHasExistingBet && hasBetCloseBtn)) {
                     const reasonLog = existing > 0
                         ? `existing bet ${formatMoney(existing)}`
                         : 'bet close button visible (chip exists but unrecognized)';
@@ -4409,29 +4789,47 @@
                         failReason = `resit_seat_${n}`;
                         return false;
                     }
+                    const walletAfterSeatReset = getWalletTotalBetReading();
+                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
                 }
             }
 
-            if (resetExistingBet) {
-                let walletAfterReset = getWalletTotalBetReading();
-                const walletResetConfirmed = await waitForCondition(() => {
-                    walletAfterReset = getWalletTotalBetReading();
-                    return walletAfterReset.detected &&
-                        !walletAfterReset.ambiguous &&
-                        walletAfterReset.amount === 0;
-                }, WALLET_RESET_VERIFY_MS, VERIFY_POLL_MS);
-                if (!walletResetConfirmed) {
-                    failReason = 'wallet_total_not_zero_before_setup';
-                    pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
-                        detected: walletAfterReset.detected ? 'Y' : 'N',
-                        ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
-                        amount: Number.isFinite(walletAfterReset.amount)
-                            ? formatMoney(walletAfterReset.amount)
-                            : 'unknown',
-                    });
-                    console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
-                    return false;
-                }
+            let walletAfterReset = getWalletTotalBetReading();
+            const walletResetConfirmed = isWalletReadingExactAmount(walletAfterReset, 0) || await waitForCondition(() => {
+                walletAfterReset = getWalletTotalBetReading();
+                return isWalletReadingExactAmount(walletAfterReset, 0);
+            }, resetExistingBet ? WALLET_RESET_VERIFY_MS : 120, VERIFY_POLL_MS);
+            if (!walletResetConfirmed) {
+                failReason = 'wallet_total_not_zero_before_setup';
+                pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
+                    detected: walletAfterReset.detected ? 'Y' : 'N',
+                    ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
+                    amount: Number.isFinite(walletAfterReset.amount)
+                        ? formatMoney(walletAfterReset.amount)
+                        : 'unknown',
+                });
+                console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
+                return false;
+            }
+
+            let finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            if (!finalBroadcastSeatState.exact) {
+                await waitForCondition(() => {
+                    finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+                    return finalBroadcastSeatState.exact;
+                }, 220, VERIFY_POLL_MS);
+                finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
+            }
+            if (!finalBroadcastSeatState.exact) {
+                failReason = 'broadcast_seat_set_mismatch_before_bet';
+                pushBetLog('error', 'broadcast_seat_set_mismatch_before_bet', {
+                    targets: finalBroadcastSeatState.targets.join(','),
+                    live: finalBroadcastSeatState.live.join(','),
+                    missing: finalBroadcastSeatState.missing.join(','),
+                    extra: finalBroadcastSeatState.extra.join(','),
+                    unresolvedReserved: finalBroadcastSeatState.unresolvedReserved.join(','),
+                });
+                return false;
             }
 
             // 칩별 외부 루프, 좌석별 내부 루프 (칩 선택 비용 최소화)
@@ -4452,8 +4850,13 @@
                 });
                 return false;
             }
+            let expectedAppliedPerSeat = 0;
             for (const spec of plan.chipPlan) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
+                if (getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
                 if (!(await selectChipByValue(spec.value))) {
                     failReason = `select_chip_${spec.value}`;
                     pushBetLog('error', 'setup_select_chip_failed', {
@@ -4463,7 +4866,20 @@
                     });
                     return false;
                 }
-                if (!(await clickMainBetChipBroadcastVerified(targetSeatNumbers, spec.value, spec.count, plan.perSeatActual))) {
+                if (isSettingsInputPending() || getBetSettingsKey() !== setupSettingsKey) {
+                    failReason = 'settings_changed_during_bet_setup';
+                    return false;
+                }
+                if (!(await clickMainBetChipBroadcastVerified(
+                    targetSeatNumbers,
+                    spec.value,
+                    spec.count,
+                    plan.perSeatActual,
+                    {
+                        expectedBasePerSeatAmount: expectedAppliedPerSeat,
+                        expectedWalletBaseAmount: expectedAppliedPerSeat * targetSeatNumbers.length,
+                    }
+                ))) {
                     failReason = `broadcast_chip_${spec.value}`;
                     pushBetLog('error', 'setup_broadcast_chip_failed', {
                         chip: formatMoney(spec.value),
@@ -4474,6 +4890,7 @@
                     });
                     return false;
                 }
+                expectedAppliedPerSeat += spec.value * spec.count;
             }
 
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });
@@ -4576,23 +4993,9 @@
     }
 
     function clickInsuranceNoElement(noBtn) {
-        const rect = noBtn.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        const targets = new Set([noBtn]);
-        const doc = noBtn.ownerDocument || document;
-        const topEl = doc.elementFromPoint?.(x, y);
-        if (topEl && noBtn.contains?.(topEl)) targets.add(topEl);
-        Array.from(noBtn.querySelectorAll?.('div,span,svg,path') || [])
-            .filter(isVisible)
-            .slice(0, 8)
-            .forEach(el => targets.add(el));
-        let clicked = false;
-        for (const target of targets) {
-            if (fireFullClick(target, x, y)) clicked = true;
-        }
-        if (!clicked) clicked = robustClick(noBtn);
-        return clicked;
+        if (!noBtn || !isInsuranceNoEnabled(noBtn)) return false;
+        const target = noBtn.closest?.('[data-id="no"]') || noBtn;
+        return robustClick(target);
     }
 
     function checkAndClickInsuranceNo() {
@@ -4881,10 +5284,15 @@
         if (Date.now() - lastAutoplayThresholdRestartAt < AUTOPLAY_THRESHOLD_RESTART_COOLDOWN_MS) return false;
         if (!isBetSettingsApplied() || betSettingsDirty) return false;
         if (activeSeatNumbers.length <= 0) return false;
+
+        // 실행 중 보충은 정확한 +10 control 버튼만 누른다. 현재 라운드의
+        // 더블/스플릿 금액이나 잠시 숨겨진 좌석 금액은 보충과 무관하다.
+        if (isAutoplayRunning()) return !!getAutoplayModifyButton() || isAutoplayButtonReady();
+
         if (isBettingWindowOpen() && !areBetSeatsReadyForRoundAction()) return false;
         const safety = getWalletTotalBetVariance(getExpectedBetPlan());
         if (getVisibleDecisionPanelInfo().active || safety.status === 'increased' || safety.status === 'ambiguous') return false;
-        return isAutoplayRunning() || isAutoplayButtonReady();
+        return isAutoplayButtonReady();
     }
 
     async function restartAutoplayForThreshold(currentRoundNumber) {
@@ -4991,6 +5399,7 @@
 
     // ========== 메인 시퀀스 ==========
     async function runSequence() {
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return;
         syncSettingsFromUI();
         if (isScriptStopped() || isRunning) return;
         if (isAutomationLocked()) {
@@ -5024,8 +5433,8 @@
                     console.warn('[AutoTrigger] visible chip exists but amount is unknown; recovery paused to avoid double betting');
                     return;
                 }
-                console.warn(`[AutoTrigger] 좌석 금액 미인식이지만 지갑 총액 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} 부족 확인 → 베팅 초기화 후 복구`);
-                markBetStateNeedsRecovery('bet_amount_unknown_under_target');
+                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 상태 ${recovery.variance.status} ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 베팅 초기화 후 복구`);
+                markBetStateNeedsRecovery(recovery.reason);
                 readyForRound = false;
             }
             if (readyForRound && !isBetSettingsApplied()) {
@@ -5048,6 +5457,14 @@
                 readyForRound = areBetSeatsReadyForRoundAction(expectedPlan);
                 await sleep(25);
                 if (isScriptStopped()) return;
+                if (!readyForRound) {
+                    lastFailReason = 'bet_not_ready_after_setup';
+                    pushBetLog('error', 'bet_not_ready_after_setup', {
+                        planned: formatMoney(expectedPlan.totalActual),
+                        seats: getRememberedBetSeatNumbers(expectedPlan.used).join(','),
+                    });
+                    return;
+                }
             } else if (readyForRound && betSettingsDirty && isBetSettingsApplied() && !betMismatch) {
                 console.log('[AutoTrigger] 자동베팅 횟수 인식만 지연됨: 칩 재세팅 없이 기존 베팅 상태 유지');
                 betSettingsDirty = false;
@@ -5153,7 +5570,8 @@
 
     // ========== 감시 루프 ==========
     setInterval(() => {
-        syncSettingsFromUI();
+        const settingsInputPending = isSettingsInputPending();
+        if (!settingsInputPending) syncSettingsFromUI();
 
         if (!isAutomationLocked() && isSupportReloadPopupVisible()) {
             dismissSupportReloadPopupIfPresent();
@@ -5169,6 +5587,7 @@
         }
 
         if (closeIdleAutoplayBottomSheetIfStale()) return;
+        if (settingsInputPending) return;
 
         const phase = diagnosePhase();
         lastDiagnosedPhase = phase;
@@ -5218,8 +5637,8 @@
         if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
             const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
             if (recovery.recoverable) {
-                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 총액 부족 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
-                if (markBetStateNeedsRecovery('bet_amount_unknown_under_target')) runSequence();
+                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 상태 ${recovery.variance.status} ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
+                if (markBetStateNeedsRecovery(recovery.reason)) runSequence();
                 return;
             }
             if (lastFailReason !== 'bet_amount_unknown_current') {
@@ -5390,8 +5809,24 @@
         const header = document.getElementById('at-header');
         makeDraggable(panel, header);
 
+        let settingsCommitTimer = null;
         const saveSettings = () => {
+            if (settingsCommitTimer !== null) {
+                clearTimeout(settingsCommitTimer);
+                settingsCommitTimer = null;
+            }
+            clearSettingsInputPending();
             syncSettingsFromUI();
+        };
+
+        const queueSettingsSave = () => {
+            markSettingsInputPending();
+            if (settingsCommitTimer !== null) clearTimeout(settingsCommitTimer);
+            settingsCommitTimer = setTimeout(() => {
+                settingsCommitTimer = null;
+                clearSettingsInputPending();
+                syncSettingsFromUI();
+            }, SETTINGS_INPUT_SETTLE_MS);
         };
 
         const updateScriptToggle = () => {
@@ -5404,7 +5839,7 @@
 
         document.getElementById('at-save').addEventListener('click', saveSettings);
         ['at-threshold', 'at-bet-amount', 'at-seat-count', 'at-auto-seat'].forEach(id => {
-            document.getElementById(id).addEventListener('input', saveSettings);
+            document.getElementById(id).addEventListener('input', queueSettingsSave);
             document.getElementById(id).addEventListener('change', saveSettings);
         });
 

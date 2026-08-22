@@ -89,7 +89,7 @@ async function testRunSequenceRecomputesPlanAfterSetup() {
 
   const env = baseSequenceSandbox({
     getExpectedBetPlan: () => currentPlan,
-    areBetSeatsReadyForRoundAction: () => false,
+    areBetSeatsReadyForRoundAction: () => setupCalled,
     isBettingWindowOpen: () => true,
     isBetSettingsApplied: () => false,
     isTargetBetTotalMismatch: () => true,
@@ -110,6 +110,23 @@ async function testRunSequenceRecomputesPlanAfterSetup() {
   assert.equal(setupCalled, true);
   assert.equal(safetyPlan?.totalActual, 3000, 'runSequence must verify autoplay with the plan recomputed after setupBetAmount()');
   assert.equal(env.startClickCount, 1);
+}
+
+async function testRunSequenceBlocksAutoplayWhenSetupDoesNotProduceReadyBet() {
+  const env = baseSequenceSandbox({
+    areBetSeatsReadyForRoundAction: () => false,
+    isBettingWindowOpen: () => true,
+    isBetSettingsApplied: () => false,
+    isTargetBetTotalMismatch: () => true,
+    betSettingsDirty: true,
+    setupBetAmount: async () => true,
+  });
+
+  await env.sandbox.runSequence();
+
+  assert.equal(env.autoplayClickCount, 0);
+  assert.equal(env.startClickCount, 0);
+  assert.equal(env.sandbox.lastFailReason, 'bet_not_ready_after_setup');
 }
 
 async function testRunSequenceRechecksSafetyImmediatelyBeforeStartClick() {
@@ -145,7 +162,9 @@ async function testUnknownAmountUnderTargetTriggersBetRecovery() {
     isBetSummaryWalletConfirmed: () => false,
     getUnknownBetWalletRecovery: () => ({
       recoverable: true,
+      reason: 'bet_amount_unknown_under_target',
       variance: {
+        status: 'under',
         expected: 3000,
         reading: { amount: 1500 },
       },
@@ -255,10 +274,39 @@ async function testRearmRechecksSafetyImmediatelyBeforeStartClick() {
   assert.equal(dialogClosed, true, 're-arm should close the autoplay menu when the second safety check fails');
 }
 
+function testRunningThresholdTopUpIgnoresRoundBetVariance() {
+  let walletSafetyReads = 0;
+  const modifyButton = { kind: 'modify' };
+  const sandbox = loadPartial('14-autoplay-rearm.js', {
+    Date,
+    THRESHOLD: 100,
+    AUTOPLAY_THRESHOLD_RESTART_COOLDOWN_MS: 900,
+    lastAutoplayThresholdRestartAt: 0,
+    isBetSettingsApplied: () => true,
+    betSettingsDirty: false,
+    isAutoplayRunning: () => true,
+    getAutoplayModifyButton: () => modifyButton,
+    isBettingWindowOpen: () => true,
+    areBetSeatsReadyForRoundAction: () => false,
+    getWalletTotalBetVariance: () => {
+      walletSafetyReads++;
+      return { status: 'increased' };
+    },
+    getExpectedBetPlan: () => ({ totalActual: 3000 }),
+    getVisibleDecisionPanelInfo: () => ({ active: true }),
+    isAutoplayButtonReady: () => false,
+  });
+
+  assert.equal(sandbox.shouldRestartAutoplayForThreshold(90, [5, 7]), true);
+  assert.equal(walletSafetyReads, 0, 'running +10 top-up must not be blocked by current hand wallet variance');
+}
+
 await testRunSequenceRecomputesPlanAfterSetup();
+await testRunSequenceBlocksAutoplayWhenSetupDoesNotProduceReadyBet();
 await testRunSequenceRechecksSafetyImmediatelyBeforeStartClick();
 await testUnknownAmountUnderTargetTriggersBetRecovery();
 await testRearmBlocksDirtyBetSettings();
 await testRearmRechecksSafetyImmediatelyBeforeStartClick();
+testRunningThresholdTopUpIgnoresRoundBetVariance();
 
 console.log('autoplay sequence/rearm regression tests passed');

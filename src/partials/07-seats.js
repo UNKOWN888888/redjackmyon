@@ -130,9 +130,21 @@
     function getKnownSeatNumbers() {
         if (isForceSitPromptSeatActive()) return [];
         return uniqueSortedSeatNumbers([
-            ...getTrustedRememberedSeatNumbers(),
+            ...getSeatReservationNumbers(),
             ...getYellowSeatRayNumbers(),
         ]);
+    }
+
+    function getSeatReservationNumbers() {
+        if (isForceSitPromptSeatActive()) return [];
+        const limit = getPlannedSeatLimit();
+        const remembered = uniqueSortedSeatNumbers(lastTargetSeatNumbers).slice(0, limit);
+        const hasRecentActiveMemory = typeof isTargetSeatMemoryRecentlyActive === 'function' &&
+            isTargetSeatMemoryRecentlyActive();
+        if (hasRecentActiveMemory && getLiveRememberedSeatEvidence(remembered).length > 0) {
+            return remembered;
+        }
+        return getTrustedRememberedSeatNumbers();
     }
 
     function isForceSitPromptSeatActive() {
@@ -147,7 +159,7 @@
         }
 
         const forceSeat = isForceSitPromptSeatActive();
-        const remembered = forceSeat ? [] : getTrustedRememberedSeatNumbers();
+        const remembered = forceSeat ? [] : getSeatReservationNumbers();
         const yellow = forceSeat ? [] : getYellowSeatRayNumbers();
         const known = uniqueSortedSeatNumbers([...remembered, ...yellow]);
         const candidate = normalizeSeatNumber(candidateNumber);
@@ -286,6 +298,36 @@
         });
     }
 
+    function getAllCloseVerifiedSeatNumbers() {
+        return uniqueSortedSeatNumbers(
+            getVisibleMainBetSeats()
+                .filter(seat => seat && isVisible(seat) && hasSeatCloseButton(seat))
+                .map(getSeatNumber)
+        );
+    }
+
+    function getBroadcastSeatTargetState(numbers) {
+        const targets = uniqueSortedSeatNumbers(numbers);
+        const live = getAllCloseVerifiedSeatNumbers();
+        const reserved = typeof lastTargetSeatNumbers !== 'undefined'
+            ? getSeatReservationNumbers()
+            : [];
+        const targetSet = new Set(targets);
+        const liveSet = new Set(live);
+        const missing = targets.filter(n => !liveSet.has(n));
+        const extra = live.filter(n => !targetSet.has(n));
+        const unresolvedReserved = reserved.filter(n => !targetSet.has(n) && !liveSet.has(n));
+        return {
+            targets,
+            live,
+            reserved,
+            missing,
+            extra,
+            unresolvedReserved,
+            exact: targets.length > 0 && missing.length === 0 && extra.length === 0 && unresolvedReserved.length === 0,
+        };
+    }
+
     function getControlledSeatNumbers() {
         return uniqueSortedSeatNumbers([
             ...getDirectVerifiedSeatNumbers(),
@@ -330,10 +372,11 @@
         const amounts = seats.map(n => {
             const state = getSeatBetState(getSeatByNumber(n));
             const inferred = allowPlanInference && canInferSeatAmountFromPlan(state, expectedPlan);
-            const amount = state.amountDetected ? state.amount : (inferred ? expectedPlan.perSeatActual : null);
+            const amount = state.amountDetected ? state.amount : null;
             return {
                 seatNumber: n,
                 amount,
+                inferredAmount: inferred ? expectedPlan.perSeatActual : null,
                 hasChip: state.hasChip,
                 chipCount: state.chipCount,
                 hasGhost: hasGhostChip(getSeatByNumber(n)),
@@ -355,7 +398,7 @@
     function isBetSummaryMatchingPlan(summary, plan) {
         const expected = Math.max(1, toInt(plan?.used, getMaxSeatCount(), 1, 7));
         if (!summary || !plan || plan.totalActual <= 0 || plan.perSeatActual <= 0) return false;
-        if (summary.seats.length < expected) return false;
+        if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
         if (summary.detectedCount < expected || summary.ambiguousCount > 0) return false;
         if (summary.total !== plan.totalActual) return false;
         return summary.amounts
@@ -368,7 +411,7 @@
         const expected = Math.max(1, toInt(plan?.used, getMaxSeatCount(), 1, 7));
         if (!summary || !plan || plan.totalActual <= 0 || plan.perSeatActual <= 0) return false;
         if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
-        if (getCloseVerifiedSeatNumbers(summary.seats).length !== expected) return false;
+        if (!getBroadcastSeatTargetState(summary.seats).exact) return false;
         if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
         return summary.amounts.every(item =>
             item.hasChip &&
@@ -379,12 +422,15 @@
 
     function getUnknownBetWalletRecovery(summary, plan) {
         const variance = getWalletTotalBetVariance(plan);
+        const recoverableStatuses = new Set(['under', 'increased', 'exact']);
         const recoverable = !!summary && summary.ambiguousCount > 0 &&
-            variance.status === 'under' &&
+            recoverableStatuses.has(variance.status) &&
             Number.isFinite(variance.reading?.amount) &&
-            variance.reading.amount >= 0 &&
-            variance.reading.amount < variance.expected;
-        return { recoverable, variance };
+            variance.reading.amount >= 0;
+        const reason = variance.status === 'increased'
+            ? 'bet_total_over_target'
+            : (variance.status === 'exact' ? 'bet_amount_unknown_unverified' : 'bet_amount_unknown_under_target');
+        return { recoverable, variance, reason };
     }
 
     function isTargetBetTotalOverLimit(numbers = getRememberedBetSeatNumbers()) {
@@ -399,10 +445,7 @@
             ...getControlledSeatNumbers(),
             ...getTrustedRememberedSeatNumbers(),
         ]);
-        const currentUsed = Math.max(
-            currentSeats.length,
-            Number.isFinite(lastSeatPlan?.used) ? lastSeatPlan.used : 0
-        );
+        const currentUsed = currentSeats.length;
         if (currentUsed <= 0 || currentUsed >= maxSeats) return null;
         if (!isBettingWindowOpen()) return null;
 
@@ -415,7 +458,7 @@
         const expandedSeatCount = Math.min(maxSeats, allSeats.length);
         if (expandedSeatCount <= currentUsed) return null;
 
-        const nextPlan = buildSeatPlanForCount(expandedSeatCount, maxSeats, allSeats.length, TARGET_BET_AMOUNT, availableChips);
+        const nextPlan = getSeatPlan(expandedSeatCount, availableChips);
         if (nextPlan.used <= currentUsed || nextPlan.used > maxSeats) return null;
         if (nextPlan.chipPlan.length === 0 || nextPlan.perSeatActual <= 0) return null;
 
@@ -534,6 +577,7 @@
 
     function handleImmediateSeatOpportunities(source = 'loop', phaseHint = null) {
         if (isScriptStopped() || isRunning || isBetSetupRunning || isAutomationLocked()) return false;
+        if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
 
         const now = Date.now();
         const fastPromptOnly = source === 'fast';
@@ -679,7 +723,12 @@
         const amountsExact = summary.detectedCount >= expected &&
             summary.total === expectedPlan.totalActual &&
             summary.amounts.every(item => item.amount === expectedPlan.perSeatActual);
-        return amountsExact || isBetSummaryWalletConfirmed(summary, expectedPlan);
+        if (isBetSummaryWalletConfirmed(summary, expectedPlan)) return true;
+        if (!amountsExact) return false;
+
+        const walletVariance = getWalletTotalBetVariance(expectedPlan);
+        if (walletVariance.status === 'exact') return true;
+        return !isBettingWindowOpen() && walletVariance.status === 'missing';
     }
 
     function hasVisibleInScope(scope, selector) {
@@ -715,7 +764,10 @@
         return getSeatBeforeSitScore(seat) > 0;
     }
 
-    function hasGhostChip(seat) { return !!seat?.querySelector?.('[data-testid="ghostChip"],[data-testid="ghost-chip"]'); }
+    function hasGhostChip(seat) {
+        return Array.from(seat?.querySelectorAll?.('[data-testid="ghostChip"],[data-testid="ghost-chip"]') || [])
+            .some(isVisible);
+    }
 
     function getVisibleEmptySeatCandidates() {
         const map = new Map();
@@ -811,6 +863,17 @@
                 return true;
             }
             clearPendingSitSeat(seatNumber);
+            const freshSeat = getSeatByNumber(seatNumber);
+            if (
+                attempt < BET_CLICK_RETRY_LIMIT &&
+                freshSeat &&
+                isVisible(freshSeat) &&
+                !isSeatTakenByOther(freshSeat) &&
+                isSeatBeforeSit(freshSeat)
+            ) {
+                console.warn(`[AutoTrigger] seat ${seatNumber} sit click had no effect; retry ${attempt + 2}/${BET_CLICK_RETRY_LIMIT + 1}`);
+                continue;
+            }
             return false;
         }
         console.warn(`[AutoTrigger] seat ${seatNumber} sit failed`);
@@ -1218,24 +1281,37 @@
     async function closeExtraSeatedSeats(keepNumbers) {
         const keep = new Set(keepNumbers);
         let closed = 0;
-        const extraSeats = getBettableSeats().filter(s => isOwnSeat(s) && !keep.has(getSeatNumber(s)));
+        const getExtraSeats = () => getVisibleMainBetSeats()
+            .filter(s => isVerifiedOwnSeat(s) && !keep.has(getSeatNumber(s)));
+        const extraSeats = getExtraSeats();
         for (const seat of extraSeats) {
             if (isScriptStopped()) return false;
             const n = getSeatNumber(seat);
             const closeBtn = getSeatCloseButton(seat);
             if (!closeBtn || !isVisible(closeBtn)) {
                 console.warn(`[AutoTrigger] extra seat ${n} close button not found`);
-                continue;
+                return false;
             }
             robustClick(closeBtn);
             closed++;
             await sleep(EXTRA_SEAT_CLOSE_WAIT_MS);
         }
         if (closed > 0) {
-            await waitForCondition(() => {
-                return getBettableSeats().filter(s => isOwnSeat(s) && !keep.has(getSeatNumber(s))).length === 0;
-            }, 500, 30);
+            const allClosed = await waitForCondition(() => getExtraSeats().length === 0, 500, 30);
+            if (!allClosed) {
+                const remaining = getExtraSeats().map(getSeatNumber);
+                console.warn(`[AutoTrigger] extra seats still active after close: ${remaining.join(',') || 'unknown'}`);
+                pushBetLog('error', 'extra_seat_close_not_verified', {
+                    keep: Array.from(keep).join(','),
+                    remaining: remaining.join(','),
+                });
+                return false;
+            }
             console.log(`[AutoTrigger] closed extra seated: ${closed}`);
+            rememberTargetSeatNumbers(
+                lastTargetSeatNumbers.filter(n => keep.has(n)),
+                { allowShrink: true, reason: 'extra_seats_closed' }
+            );
         }
         return true;
     }
@@ -1287,7 +1363,7 @@
     function getSetupSeatCandidates() {
         const map = new Map();
         const remembered = uniqueSortedSeatNumbers([
-            ...getTrustedRememberedSeatNumbers(),
+            ...getSeatReservationNumbers(),
             ...getYellowSeatRayNumbers(),
             ...Array.from(pendingSitSeats.keys()),
         ]);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      2.0.4
+// @version      2.0.5
 // @description  공개 GitHub 저장소의 BlackjackT 빌드 파일을 검증·캐시하여 빠르게 실행하는 로더
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -38,8 +38,8 @@
         if (!doc?.querySelector) return false;
         const root = doc.querySelector('#root[data-game-version],#root[data-build-number]');
         if (root) {
-            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`;
-            if (!build || /blackjackx/i.test(build)) return true;
+            const build = `${root.getAttribute?.('data-build-number') || ''} ${root.getAttribute?.('data-version') || ''}`.trim();
+            if (build) return /blackjackx/i.test(build);
         }
         return !!doc.querySelector('[data-testid="game-grid-wrapper"],[data-testid^="seat_"]');
     }

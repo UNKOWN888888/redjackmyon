@@ -82,4 +82,55 @@ assert.equal(sandbox.getWalletTotalBetVariance({ totalActual: 3000 }).status, 'e
 assert.equal(sandbox.verifyAutoplayStartSafety({ totalActual: 3000 }, 'sequence'), true);
 assert.equal(sandbox.lastFailReason, null);
 
+{
+  let modifyClicks = 0;
+  let safetyChecks = 0;
+  const modifyButton = {
+    kind: 'modify',
+    disabled: false,
+    hasAttribute: () => false,
+    getAttribute: () => null,
+    querySelector: () => null,
+  };
+  const modifyMarker = {
+    closest: selector => selector.includes('autoplay-control-button') ? modifyButton : null,
+  };
+  const modifyAddon = {
+    parentElement: modifyMarker,
+    closest: selector => selector.includes('autoplay-modify-button')
+      ? modifyMarker
+      : (selector.includes('autoplay-control-button') || selector === 'button' ? modifyButton : null),
+  };
+  const topUpSandbox = loadPartial('05-autoplay-dom.js', {
+    console,
+    AUTOPLAY_START_ROUNDS: 100,
+    AUTOPLAY_MODIFY_STEP: 10,
+    AUTOPLAY_MODIFY_MENU_WAIT_MS: 50,
+    toInt: value => Number(value),
+    isScriptStopped: () => false,
+    verifyAutoplayStartSafety: () => {
+      safetyChecks++;
+      return false;
+    },
+    getExpectedBetPlan: () => ({ totalActual: 3000 }),
+    qsaDeep: selector => selector === '[data-testid="autoplay-modify-addon-10"]' ? [modifyAddon] : [],
+    isVisible: () => true,
+    pushBetLog: () => {},
+    getElementLabel: () => 'autoplay-control-button',
+    robustClick: target => {
+      assert.equal(target, modifyButton);
+      modifyClicks++;
+      return true;
+    },
+    sleep: async () => {},
+    observeAutoplayRoundNumber: () => 100,
+    lastFailReason: null,
+    lastAutoplayModalActionAt: 0,
+  });
+
+  assert.equal(await topUpSandbox.topUpAutoplayRoundsByModify(90), true);
+  assert.equal(modifyClicks, 1, '90 rounds should require one exact +10 control click');
+  assert.equal(safetyChecks, 0, 'running +10 top-up must not run new-bet wallet safety checks');
+}
+
 console.log('autoplay safety regression tests passed');

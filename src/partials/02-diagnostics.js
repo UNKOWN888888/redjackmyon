@@ -312,10 +312,7 @@
         return seatNumber !== null && getLiveRememberedSeatEvidence([seatNumber]).includes(seatNumber);
     }
 
-    function isTargetSeatMemoryTrusted(numbers = lastTargetSeatNumbers) {
-        const remembered = uniqueSortedSeatNumbers(numbers);
-        if (remembered.length <= 0) return false;
-
+    function isTargetSeatMemoryRecentlyActive() {
         const recentlyConfirmed = lastTargetSeatRememberedAt > 0 &&
             Date.now() - lastTargetSeatRememberedAt <= TARGET_SEAT_MEMORY_GUARD_MS;
         const activeBetContext = isBetSetupRunning ||
@@ -324,17 +321,29 @@
             isBetSettingsApplied() ||
             (lastRoundCountSeenAt > 0 && Date.now() - lastRoundCountSeenAt <= TARGET_SEAT_MEMORY_GUARD_MS) ||
             (lastSeatPlan?.totalActual || 0) > 0;
+        return recentlyConfirmed && activeBetContext;
+    }
 
-        if (recentlyConfirmed && activeBetContext) return true;
-        return getLiveRememberedSeatEvidence(remembered).length > 0;
+    function isTargetSeatMemoryTrusted(numbers = lastTargetSeatNumbers) {
+        const remembered = uniqueSortedSeatNumbers(numbers);
+        if (remembered.length <= 0) return false;
+
+        const liveEvidence = getLiveRememberedSeatEvidence(remembered);
+        const bettingWindowOpen = typeof isBettingWindowOpen === 'function' && isBettingWindowOpen();
+        if (!bettingWindowOpen && isTargetSeatMemoryRecentlyActive()) return true;
+        return liveEvidence.length === remembered.length;
     }
 
     function getTrustedRememberedSeatNumbers() {
         const now = Date.now();
         const limit = getPlannedSeatLimit();
         const remembered = uniqueSortedSeatNumbers(lastTargetSeatNumbers).slice(0, limit);
+        const liveEvidence = getLiveRememberedSeatEvidence(remembered);
+        const bettingWindowOpen = typeof isBettingWindowOpen === 'function' && isBettingWindowOpen();
         const cacheKey = [
             remembered.join(','),
+            liveEvidence.join(','),
+            bettingWindowOpen ? 1 : 0,
             limit,
             lastTargetSeatRememberedAt,
             lastAppliedBetSettingsKey,
@@ -352,9 +361,8 @@
             return _trustedRememberedSeatNumbersCache;
         }
 
-        const value = remembered.length > 0 && isTargetSeatMemoryTrusted(remembered)
-            ? remembered
-            : [];
+        const preserveRecentRoundMemory = !bettingWindowOpen && isTargetSeatMemoryRecentlyActive();
+        const value = preserveRecentRoundMemory ? remembered : liveEvidence;
         _trustedRememberedSeatNumbersCache = value;
         _trustedRememberedSeatNumbersCacheAt = now;
         _trustedRememberedSeatNumbersCacheKey = cacheKey;
@@ -368,9 +376,14 @@
         const allowShrink = !!options.allowShrink;
         const refresh = options.refresh !== false;
         const memoryTrusted = isTargetSeatMemoryTrusted(previous);
+        const partialLiveRefresh = !allowShrink &&
+            incoming.length > 0 &&
+            incoming.length < previous.length &&
+            incoming.every(n => previous.includes(n)) &&
+            isTargetSeatMemoryRecentlyActive();
 
         let next = incoming;
-        if (!allowShrink && memoryTrusted && previous.length > 0) {
+        if (!allowShrink && (memoryTrusted || partialLiveRefresh) && previous.length > 0) {
             const merged = [];
             for (const n of previous) {
                 if (!merged.includes(n) && merged.length < limit) merged.push(n);
@@ -413,6 +426,18 @@
     function markBetSettingsApplied() {
         lastAppliedBetSettingsKey = getBetSettingsKey();
         GM_setValue('lastAppliedBetSettingsKey', lastAppliedBetSettingsKey);
+    }
+
+    function markSettingsInputPending() {
+        settingsInputPendingUntil = Date.now() + SETTINGS_INPUT_SETTLE_MS;
+    }
+
+    function clearSettingsInputPending() {
+        settingsInputPendingUntil = 0;
+    }
+
+    function isSettingsInputPending() {
+        return settingsInputPendingUntil > Date.now();
     }
 
     function syncSettingsFromUI() {
@@ -459,12 +484,12 @@
     }
 
     function markBetStateNeedsRecovery(reason) {
-        if (Date.now() - lastRecoveryAt < AUTOBET_RECOVERY_COOLDOWN_MS) return false;
         autoBetArmed = false;
         betSettingsDirty = true;
         lastBetSetupAt = 0;
-        lastRecoveryAt = Date.now();
         lastFailReason = reason;
+        if (Date.now() - lastRecoveryAt < AUTOBET_RECOVERY_COOLDOWN_MS) return false;
+        lastRecoveryAt = Date.now();
         console.warn(`[AutoTrigger] ${reason} → 베팅 상태 복구 예약`);
         return true;
     }
@@ -496,6 +521,7 @@
             'bet_amount_not_detected_current',
             'bet_amount_not_detected_after_setup',
             'bet_amount_unknown_under_target',
+            'bet_amount_unknown_unverified',
             'wallet_total_not_zero_before_setup',
             'bet_total_over_target',
             'bet_total_over_target_after_setup',
@@ -527,6 +553,7 @@
         seatLimitOverride = null;
         forcedAutoSeatCount = null;
         forceSitPromptSeatUntil = 0;
+        clearSettingsInputPending();
         lastSeatPlan = emptyPlan();
         clearRememberedSeatNumbers();
         betSettingsDirty = true;

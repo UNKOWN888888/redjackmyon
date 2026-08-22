@@ -15,6 +15,10 @@
         };
         const pointerBase = { ...base, pointerId: 1, pointerType: isTouchProfile ? 'touch' : 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 };
         try {
+            if (options.nativeClick && typeof element.click === 'function') {
+                element.click();
+                return true;
+            }
             element.dispatchEvent(new PE('pointerover',  pointerBase));
             element.dispatchEvent(new PE('pointerenter', pointerBase));
             if (useMouse) {
@@ -36,10 +40,8 @@
             }
             element.dispatchEvent(new PE('pointerup',  { ...pointerBase, buttons: 0, pressure: 0 }));
             if (useMouse) element.dispatchEvent(new ME('mouseup', { ...base, buttons: 0 }));
-            element.dispatchEvent(new ME('click',      { ...base, buttons: 0 }));
-            if (options.nativeClick && typeof element.click === 'function') {
-                try { element.click(); } catch (_) {}
-            }
+
+            element.dispatchEvent(new ME('click', { ...base, buttons: 0 }));
             return true;
         } catch (e) {
             console.warn('[AutoTrigger] fireFullClick failed', e);
@@ -166,8 +168,16 @@
         if (element.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return null;
         const candidate = element.closest?.('[data-testid^="seat_"],[data-testid^="mainbet_"],[data-testid^="mainbetSeat_"],[data-testid="chip"],[role="button"]') || element;
         if (candidate.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return null;
-        if (boundary && !(boundary.contains?.(candidate) || candidate.contains?.(boundary))) return element;
+        if (boundary && !boundary.contains?.(candidate)) return null;
         return candidate;
+    }
+
+    function getBetClickBoundary(element) {
+        if (!element) return null;
+        return element.closest?.('[data-testid^="mainbet_"]') ||
+            element.closest?.('[data-testid^="mainbetSeat_"]') ||
+            element.closest?.('[data-testid^="seat_"]') ||
+            element;
     }
 
     function addSafeBetClickTarget(targets, el, boundary = null) {
@@ -193,11 +203,13 @@
         }
     }
 
-    function isSafeBetDispatchTarget(el) {
+    function isSafeBetDispatchTarget(el, boundary = null) {
         if (!el || !isVisible(el)) return false;
+        if (boundary && !boundary.contains?.(el)) return false;
         if (el.closest?.(SEAT_CLOSE_ICON_SELECTOR)) return false;
         if (el.closest?.('#at-panel')) return false;
         if (el.closest?.('[data-testid="bottom-sheet-modal"],[data-testid="modal-header"],[data-testid="modal-body"]')) return false;
+        if (el.closest?.('[data-testid="bj-decision-panel"],[data-testid="popup-content"],[data-testid="blocking-popup-content"]')) return false;
         if (el.closest?.('button[data-testid^="chip-stack-value-"]')) return false;
         if (el.closest?.('[data-testid="autoplay-button"],[data-testid="autoplay-control-button"]')) return false;
         return true;
@@ -207,6 +219,7 @@
         if (!element || !isVisible(element)) return false;
         const points = getSafeBetClickPoints(element);
         const doc = element.ownerDocument || document;
+        const boundary = getBetClickBoundary(element);
         const attempt = Math.max(0, Math.floor(options.attempt || 0));
         const profile = options.profile || getBetClickProfile(attempt);
         const orderedPoints = points.length > 0
@@ -217,12 +230,11 @@
             const topEl = doc.elementFromPoint?.(x, y);
             const candidates = [
                 topEl,
-                normalizeBetClickTarget(topEl, null),
-                normalizeBetClickTarget(topEl, element),
-                normalizeBetClickTarget(element, element),
+                normalizeBetClickTarget(topEl, boundary),
+                normalizeBetClickTarget(element, boundary),
                 element,
             ];
-            const target = candidates.find(isSafeBetDispatchTarget);
+            const target = candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary));
             if (!target) continue;
 
             if (lastBetClickDebug && Date.now() - lastBetClickDebugAt < 1000 && !/\sp\d+\/t\d+/.test(lastBetClickDebug)) {

@@ -1,18 +1,41 @@
     // ========== 라운드/오토 버튼 ==========
+    function parseAutoplayRoundCounter(el) {
+        if (!el || !isVisible(el)) return null;
+        const text = String(el.textContent || '').trim();
+        if (!/^\d+$/.test(text)) return null;
+        const value = parseInt(text, 10);
+        return Number.isFinite(value) && value >= 0 ? value : null;
+    }
+
     function getRoundNumber() {
         const now = Date.now();
         if (_roundNumberCacheAt > 0 && now - _roundNumberCacheAt < DOM_MICRO_CACHE_MS) {
             return _roundNumberCache;
         }
-        const btn = getAutoplayButton();
-        const text = (btn?.textContent || '').trim();
-        if (!/^\d+$/.test(text)) {
-            _roundNumberCache = null;
-            _roundNumberCacheAt = now;
-            return null;
+
+        const counterSelectors = [
+            '[data-testid="autoplay-stop-button"] [data-testid="number-slider-list-item"]',
+            'button[data-testid="autoplay-button"] [data-testid="number-slider-list-item"]',
+        ];
+        for (const selector of counterSelectors) {
+            for (const counter of qsaDeep(selector)) {
+                const value = parseAutoplayRoundCounter(counter);
+                if (value === null) continue;
+                _roundNumberCache = value;
+                _roundNumberCacheAt = now;
+                return value;
+            }
         }
-        const value = parseInt(text, 10);
-        _roundNumberCache = Number.isFinite(value) && value > 0 ? value : null;
+
+        const btn = getAutoplayButton();
+        const nestedCounter = btn?.querySelector?.('[data-testid="number-slider-list-item"]');
+        const nestedValue = parseAutoplayRoundCounter(nestedCounter);
+        if (nestedValue !== null) {
+            _roundNumberCache = nestedValue;
+            _roundNumberCacheAt = now;
+            return nestedValue;
+        }
+        _roundNumberCache = parseAutoplayRoundCounter(btn);
         _roundNumberCacheAt = now;
         return _roundNumberCache;
     }
@@ -65,26 +88,45 @@
     }
 
     function getAutoplayModifyButton() {
-        for (const marker of qsaDeep('[data-testid="autoplay-modify-button"]')) {
-            const control = marker.closest?.('button[data-testid="autoplay-control-button"]') || marker.closest?.('button');
-            if (control && isVisible(control) && !isDisabledLike(control) && marker && isVisible(marker)) return control;
+        const addonSelector = `[data-testid="autoplay-modify-addon-${AUTOPLAY_MODIFY_STEP}"]`;
+        for (const addon of qsaDeep(addonSelector)) {
+            const marker = addon.closest?.('[data-testid="autoplay-modify-button"]') || addon.parentElement;
+            const control = addon.closest?.('button[data-testid="autoplay-control-button"]') || addon.closest?.('button');
+            if (control && marker && isVisible(addon) && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
         }
         for (const control of qsaDeep('button[data-testid="autoplay-control-button"]')) {
-            const marker = control.querySelector?.('[data-testid="autoplay-modify-button"]');
-            if (marker && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
+            const addon = control.querySelector?.(addonSelector);
+            const marker = addon?.closest?.('[data-testid="autoplay-modify-button"]') || addon?.parentElement;
+            if (addon && marker && isVisible(addon) && isVisible(marker) && isVisible(control) && !isDisabledLike(control)) return control;
         }
         return null;
     }
 
+    async function getOrOpenAutoplayModifyButton() {
+        let modifyBtn = getAutoplayModifyButton();
+        if (modifyBtn) return modifyBtn;
+
+        const autoplayBtn = getAutoplayButton();
+        if (!autoplayBtn || !isVisible(autoplayBtn) || isDisabledLike(autoplayBtn)) return null;
+        pushBetLog('info', 'threshold_modify_menu_open', {
+            target: getElementLabel(autoplayBtn),
+            step: `+${AUTOPLAY_MODIFY_STEP}`,
+        });
+        markAutoplayModalAction();
+        if (!robustClick(autoplayBtn)) return null;
+        await waitForCondition(() => !!getAutoplayModifyButton(), AUTOPLAY_MODIFY_MENU_WAIT_MS, 20);
+        modifyBtn = getAutoplayModifyButton();
+        return modifyBtn;
+    }
+
     async function topUpAutoplayRoundsByModify(currentRoundNumber) {
         const missingRounds = Math.max(1, AUTOPLAY_START_ROUNDS - toInt(currentRoundNumber, AUTOPLAY_START_ROUNDS - 10, 0, AUTOPLAY_START_ROUNDS));
-        const clickCount = Math.max(1, Math.min(10, Math.ceil(missingRounds / 10)));
+        const clickCount = Math.max(1, Math.min(10, Math.ceil(missingRounds / AUTOPLAY_MODIFY_STEP)));
         let clicked = 0;
         let latestRound = Number.isFinite(currentRoundNumber) ? currentRoundNumber : observeAutoplayRoundNumber();
         for (let i = 0; i < clickCount; i++) {
             if (isScriptStopped()) return Number.isFinite(latestRound) && latestRound >= AUTOPLAY_START_ROUNDS;
-            if (!verifyAutoplayStartSafety(getExpectedBetPlan(), 'threshold_modify')) return false;
-            const modifyBtn = getAutoplayModifyButton();
+            const modifyBtn = await getOrOpenAutoplayModifyButton();
             if (!modifyBtn) {
                 lastFailReason = 'threshold_modify_btn_missing';
                 console.warn('[AutoTrigger] 기준미만 보충: autoplay modify 버튼 없음');
@@ -96,7 +138,15 @@
                 step: `${i + 1}/${clickCount}`,
                 target: getElementLabel(modifyBtn),
             });
-            robustClick(modifyBtn);
+            if (!robustClick(modifyBtn)) {
+                lastFailReason = 'threshold_modify_dispatch_failed';
+                pushBetLog('error', 'threshold_modify_dispatch_failed', {
+                    step: `${i + 1}/${clickCount}`,
+                    target: getElementLabel(modifyBtn),
+                });
+                return false;
+            }
+            markAutoplayModalAction();
             clicked++;
             await sleep(35);
             latestRound = observeAutoplayRoundNumber();

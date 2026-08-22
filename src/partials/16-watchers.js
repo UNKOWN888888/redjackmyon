@@ -1,6 +1,7 @@
     // ========== 감시 루프 ==========
     setInterval(() => {
-        syncSettingsFromUI();
+        const settingsInputPending = isSettingsInputPending();
+        if (!settingsInputPending) syncSettingsFromUI();
 
         if (!isAutomationLocked() && isSupportReloadPopupVisible()) {
             dismissSupportReloadPopupIfPresent();
@@ -16,6 +17,7 @@
         }
 
         if (closeIdleAutoplayBottomSheetIfStale()) return;
+        if (settingsInputPending) return;
 
         const phase = diagnosePhase();
         lastDiagnosedPhase = phase;
@@ -65,8 +67,8 @@
         if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
             const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
             if (recovery.recoverable) {
-                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 총액 부족 ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
-                if (markBetStateNeedsRecovery('bet_amount_unknown_under_target')) runSequence();
+                console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 상태 ${recovery.variance.status} ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
+                if (markBetStateNeedsRecovery(recovery.reason)) runSequence();
                 return;
             }
             if (lastFailReason !== 'bet_amount_unknown_current') {

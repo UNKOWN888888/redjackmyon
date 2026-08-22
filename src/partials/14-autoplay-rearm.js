@@ -114,10 +114,15 @@
         if (Date.now() - lastAutoplayThresholdRestartAt < AUTOPLAY_THRESHOLD_RESTART_COOLDOWN_MS) return false;
         if (!isBetSettingsApplied() || betSettingsDirty) return false;
         if (activeSeatNumbers.length <= 0) return false;
+
+        // 실행 중 보충은 정확한 +10 control 버튼만 누른다. 현재 라운드의
+        // 더블/스플릿 금액이나 잠시 숨겨진 좌석 금액은 보충과 무관하다.
+        if (isAutoplayRunning()) return !!getAutoplayModifyButton() || isAutoplayButtonReady();
+
         if (isBettingWindowOpen() && !areBetSeatsReadyForRoundAction()) return false;
         const safety = getWalletTotalBetVariance(getExpectedBetPlan());
         if (getVisibleDecisionPanelInfo().active || safety.status === 'increased' || safety.status === 'ambiguous') return false;
-        return isAutoplayRunning() || isAutoplayButtonReady();
+        return isAutoplayButtonReady();
     }
 
     async function restartAutoplayForThreshold(currentRoundNumber) {
