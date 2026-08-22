@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      2.0.3
+// @version      2.0.4
 // @description  공개 GitHub 저장소의 BlackjackT 빌드 파일을 검증·캐시하여 빠르게 실행하는 로더
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -11,6 +11,7 @@
 // @match        https://*.pragmaticplaylive.net/*
 // @match        https://widget.xma8riyvac.com/*
 // @match        https://api.honorlink.org/*
+// @match        https://client.fcxlljmmbqtczjya.net/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_info

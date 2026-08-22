@@ -12,6 +12,7 @@ const userscriptMeta = fs.readFileSync(path.join(rootDir, 'src', 'userscript.met
 
 assert.match(userscriptMeta, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
 assert.match(userscriptMeta, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
+assert.match(userscriptMeta, /@match\s+https:\/\/client\.fcxlljmmbqtczjya\.net\/\*/);
 
 function runBoot({ gameDocument = true, iframe = true, alreadyActive = false } = {}) {
   const attributes = new Set(alreadyActive ? ['data-autotrigger-script-active'] : []);
