@@ -42,6 +42,21 @@
             return false;
         }
         const selectedBefore = getSelectedChipAmount();
+        const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
+            (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
+        const alreadySelected = selectedBefore === chipValue ||
+            !!(stackBtn && isStackChipButtonSelected(stackBtn)) ||
+            (!stackBtn && isTrayChipSelected(chip));
+        if (alreadySelected) {
+            if (stackBtn) rememberSelectedStackChip(chipValue);
+            pushBetLog('info', 'select_chip_reused', {
+                planned: formatMoney(chipValue),
+                selected: selectedBefore > 0 ? formatMoney(selectedBefore) : formatMoney(chipValue),
+                target: getElementLabel(chip),
+                signal: stackBtn ? 'selected_ring_or_amount' : 'tray_selected',
+            });
+            return true;
+        }
         clearRememberedSelectedStackChip();
         pushBetLog('info', 'select_chip', {
             planned: formatMoney(chipValue),
@@ -57,8 +72,7 @@
             });
             return false;
         }
-        const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
-            (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
+        const selectionDispatchedAt = Date.now();
         await sleep(CLICK_DELAY_MS);
         let selectedAmount = getSelectedChipAmount();
         let stackSelectionConfirmed = !!(stackBtn && isStackChipButtonSelected(stackBtn));
@@ -97,10 +111,13 @@
         }
         if (stackBtn) {
             rememberSelectedStackChip(chipValue);
+            const settleWaitMs = Math.max(0, CHIP_SELECTION_SETTLE_MS - (Date.now() - selectionDispatchedAt));
+            if (settleWaitMs > 0) await sleep(settleWaitMs);
             pushBetLog('info', 'select_chip_ok_stack', {
                 planned: formatMoney(chipValue),
                 selected: Number.isFinite(selectedAmount) && selectedAmount > 0 ? formatMoney(selectedAmount) : 'unknown',
                 signal: stackSelectionConfirmed || isStackChipButtonSelected(stackBtn) ? 'selected_ring_or_attribute' : 'dispatch_memory',
+                settleWaitMs,
             });
             return true;
         }
@@ -116,9 +133,12 @@
             console.warn(`[AutoTrigger] chip ${chipValue} selection not verified; selectable=[${selectable}]`);
             return false;
         }
+        const settleWaitMs = Math.max(0, CHIP_SELECTION_SETTLE_MS - (Date.now() - selectionDispatchedAt));
+        if (settleWaitMs > 0) await sleep(settleWaitMs);
         pushBetLog('info', 'select_chip_ok_tray', {
             planned: formatMoney(chipValue),
             selected: formatMoney(getSelectedChipAmount()),
+            settleWaitMs,
         });
         return true;
     }

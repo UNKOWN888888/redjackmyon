@@ -279,6 +279,8 @@ function makeStackButton(value) {
 
 const stackButton = makeStackButton(7500);
 const stackLogs = [];
+let selectedStackAmount = 0;
+let stackSelectionClicks = 0;
 const stackSandbox = loadPartial('09-betting-clicks.js', {
   console,
   Date,
@@ -287,6 +289,7 @@ const stackSandbox = loadPartial('09-betting-clicks.js', {
   lastSelectedStackChipAt: 0,
   CLICK_DELAY_MS: 0,
   CHIP_SELECTION_VERIFY_MS: 0,
+  CHIP_SELECTION_SETTLE_MS: 0,
   VERIFY_POLL_MS: 1,
   isScriptStopped: () => false,
   closeBetBlockingBottomSheetIfOpen: async () => false,
@@ -295,20 +298,111 @@ const stackSandbox = loadPartial('09-betting-clicks.js', {
   formatMoney: n => String(n),
   getElementLabel: el => el.getAttribute?.('data-testid') || 'button',
   detectAvailableChips: () => [{ value: 7500, element: stackButton }],
-  robustClick: () => true,
+  robustClick: () => { stackSelectionClicks++; return true; },
   sleep: async () => {},
   waitForCondition: async fn => fn(),
-  getSelectedChipAmount: () => 0,
+  getSelectedChipAmount: () => selectedStackAmount,
   isStackChipButtonSelected: () => false,
 });
 assert.equal(await stackSandbox.selectChipByValue(7500), true);
 assert.equal(stackSandbox.isSelectedChipSafeForSeatClick(7500, 7500), true);
 assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true);
+assert.equal(stackSelectionClicks, 1);
+selectedStackAmount = 7500;
+assert.equal(await stackSandbox.selectChipByValue(7500), true);
+assert.equal(stackSelectionClicks, 1, 'an already-selected stack chip must not be clicked again before a seat retry');
+assert.equal(stackLogs.some(log => log.message === 'select_chip_reused'), true);
 
 {
+  let selectedAmount = 0;
+  let walletAmount = 0;
+  let chipSelectionClicks = 0;
+  let seatBetClicks = 0;
+  const retryLogs = [];
+  const retryStackButton = {
+    textContent: '15000',
+    closest: selector => selector === 'button[data-testid^="chip-stack-value-"]' ? retryStackButton : null,
+    matches: selector => selector === 'button[data-testid^="chip-stack-value-"]',
+    getAttribute: name => name === 'data-testid' ? 'chip-stack-value-15000' : null,
+  };
+  const seats = new Map([1, 2, 3, 4].map(seatNumber => [seatNumber, { seatNumber }]));
+  const retrySandbox = loadPartial('09-betting-clicks.js', {
+    BET_CLICK_RETRY_LIMIT: 2,
+    BET_NO_EFFECT_RETRY_LIMIT: 2,
+    BET_CLICK_VERIFY_MS: 0,
+    BET_NO_EFFECT_RECHECK_MS: 0,
+    VERIFY_POLL_MS: 1,
+    SEAT_CLICK_DELAY_MS: 0,
+    SELECTED_STACK_CHIP_TTL_MS: 2500,
+    CHIP_SELECTION_VERIFY_MS: 0,
+    CHIP_SELECTION_SETTLE_MS: 0,
+    CLICK_DELAY_MS: 0,
+    lastSelectedStackChipValue: 0,
+    lastSelectedStackChipAt: 0,
+    Date,
+    uniqueSortedSeatNumbers: numbers => [...new Set(numbers)].sort((a, b) => a - b),
+    getSeatByNumber: number => seats.get(number) || null,
+    getSeatBetState: () => ({ amountDetected: false, amount: null, hasChip: false, chipCount: 0 }),
+    getSeatDisplayedBetAmount: () => null,
+    getWalletTotalBetReading: () => ({ detected: true, ambiguous: false, amount: walletAmount }),
+    getBroadcastSeatTargetState: numbers => ({ targets: numbers, live: numbers, missing: [], extra: [], unresolvedReserved: [], exact: true }),
+    isVisible: () => true,
+    isDisabledLike: () => false,
+    isScriptStopped: () => false,
+    closeBetBlockingBottomSheetIfOpen: async () => false,
+    findChipByValue: value => value === 15000 ? retryStackButton : null,
+    detectAvailableChips: () => [{ value: 15000, element: retryStackButton }],
+    getSelectedChipAmount: () => selectedAmount,
+    isStackChipButtonSelected: () => false,
+    isTrayChipSelected: () => false,
+    robustClick: () => {
+      chipSelectionClicks++;
+      selectedAmount = 15000;
+      return true;
+    },
+    getSeatBetClickElement: seat => seat,
+    getSeatBetClickCandidates: seat => [seat],
+    getElementLabel: el => el === retryStackButton ? 'chip-stack-value-15000' : `mainbetSeat_${el.seatNumber}`,
+    getBetClickProbeLabel: () => 'seat-probe',
+    markBetClickDebug: () => {},
+    markBetClickGuard: () => {},
+    pushBetLog: (level, message, data) => retryLogs.push({ level, message, data }),
+    formatMoney: String,
+    robustBetClick: () => {
+      seatBetClicks++;
+      if (seatBetClicks === 2) walletAmount = 60000;
+      return true;
+    },
+    sleep: async () => {},
+    waitForCondition: async fn => fn(),
+    hasGhostChip: () => false,
+  });
+
+  assert.equal(await retrySandbox.selectChipByValue(15000), true);
+  assert.equal(await retrySandbox.clickMainBetChipBroadcastVerified(
+    [1, 2, 3, 4],
+    15000,
+    1,
+    22500,
+    { expectedBasePerSeatAmount: 0, expectedWalletBaseAmount: 0 },
+  ), true);
+  assert.equal(seatBetClicks, 2, 'the unchanged first seat click must retry once');
+  assert.equal(chipSelectionClicks, 1, 'the selected 15,000 chip must not be clicked again during the seat retry');
+  assert.equal(walletAmount, 60000, 'one verified broadcast click must add exactly 15,000 to each of four seats');
+  assert.equal(retryLogs.some(log => log.message === 'select_chip_reused'), true);
+}
+
+{
+  const mainBetSvg = {
+    closest: () => null,
+  };
+  const ghostChip = {
+    closest: selector => selector === 'svg' ? mainBetSvg : null,
+  };
   const directSeat = {
     getAttribute: name => name === 'data-testid' ? 'mainbetSeat_5' : null,
     closest: () => null,
+    querySelector: selector => selector.includes('ghost-chip') ? ghostChip : (selector === 'svg' ? mainBetSvg : null),
   };
   const directSpot = {
     querySelector: () => null,
@@ -340,12 +434,15 @@ assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true
 
   const candidates = candidateSandbox.getSeatBetClickCandidates(sourceSeat);
   assert.equal(candidates[0], directSeat, 'the stable mainbetSeat element must be the primary click candidate');
-  assert.equal(candidates[1], directSpot, 'the enclosing mainbet spot must be the first fallback candidate');
+  assert.equal(candidates[1], ghostChip, 'the visible ghost chip must be the first fallback candidate');
+  assert.equal(candidates[2], mainBetSvg, 'the main-bet SVG must remain an exact visual fallback');
+  assert.equal(candidates[3], directSpot, 'the enclosing mainbet spot must remain a later fallback');
 }
 
 {
   const dispatches = [];
-  const directSpot = { contains: () => true };
+  let hitTarget = null;
+  const directSpot = { contains: candidate => [directSpot, directSeat, svgPath].includes(candidate) };
   const directSeat = {
     ownerDocument: null,
     getAttribute: name => name === 'data-testid' ? 'mainbetSeat_5' : null,
@@ -364,9 +461,14 @@ assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true
       return null;
     },
   };
-  const doc = { elementFromPoint: () => svgPath };
+  const outsideOverlay = {
+    getAttribute: () => null,
+    closest: () => null,
+  };
+  const doc = { elementFromPoint: () => hitTarget };
   directSeat.ownerDocument = doc;
   svgPath.ownerDocument = doc;
+  hitTarget = svgPath;
 
   const clickSandbox = loadPartial('04-clicks.js', {
     SEAT_CLOSE_ICON_SELECTOR: '[data-testid="close-icon"]',
@@ -382,19 +484,22 @@ assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true
   };
   clickSandbox.invalidateDynamicCaches = () => {};
 
-  assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 0 }), true);
-  assert.equal(dispatches[0].target, directSeat, 'the event must be dispatched to mainbetSeat, not the SVG path under the pointer');
+  assert.equal(clickSandbox.robustBetClick(directSeat, { attempt: 0 }), true);
+  assert.equal(dispatches[0].target, svgPath, 'the event must preserve the actual safe visual hit target');
   assert.equal(dispatches[0].options.profile, 'mouse');
   assert.equal(dispatches[0].options.nativeClick, false);
 
+  hitTarget = outsideOverlay;
   assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 1 }), true);
-  assert.equal(dispatches[1].target, directSeat);
-  assert.equal(dispatches[1].options.nativeClick, true, 'the second no-effect attempt must use a single native click fallback');
+  assert.equal(dispatches[1].target, svgPath, 'an unrelated overlay hit must fall back to the exact ghost-chip candidate');
+  assert.equal(dispatches[1].options.profile, 'mouse');
+  assert.equal(dispatches[1].options.nativeClick, false);
 
+  hitTarget = svgPath;
   assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 2 }), true);
-  assert.equal(dispatches[2].target, directSeat);
+  assert.equal(dispatches[2].target, svgPath);
   assert.equal(dispatches[2].options.profile, 'touch');
-  assert.match(clickSandbox.getBetClickProbeLabel(svgPath), /hit=ghost-chip,dispatch=mainbetSeat_5/);
+  assert.match(clickSandbox.getBetClickProbeLabel(svgPath), /hit=ghost-chip\(inside\),candidate=ghost-chip,boundary=.*dispatch=ghost-chip/);
 }
 
 {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.92
+// @version      1.93
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 다중 칩 전환과 검증된 부분 베팅 재개를 지원하고, 좌석 집합·지갑 총액·클릭 단계를 세밀하게 기록합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -34,7 +34,7 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.92';
+    const SCRIPT_VERSION = '1.93';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';
@@ -140,6 +140,7 @@
     const SINGLE_CHIP_DOM_PART_LIMIT = 8;
     const SELECTED_STACK_CHIP_TTL_MS = 2500;
     const CHIP_SELECTION_VERIFY_MS = 160;
+    const CHIP_SELECTION_SETTLE_MS = 120;
     const VERIFIED_BET_PROGRESS_TTL_MS = 120000;
     const BET_MISMATCH_LOG_REPEAT_MS = 2000;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
@@ -1463,15 +1464,18 @@
     function getBetClickProbeLabel(element) {
         if (!element || !isVisible(element)) return 'probe=null';
         const boundary = getBetClickBoundary(element);
-        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
-        const point = getSafeBetClickPoint(preferredTarget);
-        const topEl = preferredTarget.ownerDocument?.elementFromPoint?.(point.x, point.y);
+        const pointTarget = isSafeBetDispatchTarget(element, boundary)
+            ? element
+            : (normalizeBetClickTarget(element, boundary) || element);
+        const point = getSafeBetClickPoint(pointTarget);
+        const topEl = pointTarget.ownerDocument?.elementFromPoint?.(point.x, point.y);
         const dispatchTarget = getBetDispatchTarget(element, boundary, topEl);
-        return `${Math.round(point.x)},${Math.round(point.y)}:hit=${getElementLabel(topEl)},dispatch=${getElementLabel(dispatchTarget)}`;
+        const hitScope = !topEl ? 'none' : (!boundary ? 'unbounded' : (boundary.contains?.(topEl) ? 'inside' : 'outside'));
+        return `${Math.round(point.x)},${Math.round(point.y)}:hit=${getElementLabel(topEl)}(${hitScope}),candidate=${getElementLabel(element)},boundary=${getElementLabel(boundary)},dispatch=${getElementLabel(dispatchTarget)}`;
     }
 
     function getBetClickProfile(attempt = 0) {
-        return ['mouse', 'native', 'touch', 'mouse'][Math.max(0, attempt) % 4];
+        return ['mouse', 'mouse', 'touch', 'native'][Math.max(0, attempt) % 4];
     }
 
     function normalizeBetClickTarget(element, boundary) {
@@ -1529,10 +1533,10 @@
     function getBetDispatchTarget(element, boundary, topEl) {
         const preferredTarget = normalizeBetClickTarget(element, boundary);
         const candidates = [
-            preferredTarget,
-            normalizeBetClickTarget(topEl, boundary),
-            element,
             topEl,
+            element,
+            normalizeBetClickTarget(topEl, boundary),
+            preferredTarget,
         ];
         return candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary)) || null;
     }
@@ -1541,8 +1545,10 @@
         if (!element || !isVisible(element)) return false;
         const doc = element.ownerDocument || document;
         const boundary = getBetClickBoundary(element);
-        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
-        const points = getSafeBetClickPoints(preferredTarget);
+        const pointTarget = isSafeBetDispatchTarget(element, boundary)
+            ? element
+            : (normalizeBetClickTarget(element, boundary) || element);
+        const points = getSafeBetClickPoints(pointTarget);
         const attempt = Math.max(0, Math.floor(options.attempt || 0));
         const profile = options.profile || getBetClickProfile(attempt);
         const orderedPoints = points.length > 0
@@ -3628,9 +3634,9 @@
         const mainBetChipLayer = directSpot?.querySelector?.('.jc_iJ,.jc_je');
         return Array.from(new Set([
             directSeat,
-            directSpot,
             mainBetGhost,
             mainBetSvg,
+            directSpot,
             mainBetChipLayer,
             spot,
             info?.element,
@@ -3957,6 +3963,21 @@
             return false;
         }
         const selectedBefore = getSelectedChipAmount();
+        const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
+            (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
+        const alreadySelected = selectedBefore === chipValue ||
+            !!(stackBtn && isStackChipButtonSelected(stackBtn)) ||
+            (!stackBtn && isTrayChipSelected(chip));
+        if (alreadySelected) {
+            if (stackBtn) rememberSelectedStackChip(chipValue);
+            pushBetLog('info', 'select_chip_reused', {
+                planned: formatMoney(chipValue),
+                selected: selectedBefore > 0 ? formatMoney(selectedBefore) : formatMoney(chipValue),
+                target: getElementLabel(chip),
+                signal: stackBtn ? 'selected_ring_or_amount' : 'tray_selected',
+            });
+            return true;
+        }
         clearRememberedSelectedStackChip();
         pushBetLog('info', 'select_chip', {
             planned: formatMoney(chipValue),
@@ -3972,8 +3993,7 @@
             });
             return false;
         }
-        const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
-            (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
+        const selectionDispatchedAt = Date.now();
         await sleep(CLICK_DELAY_MS);
         let selectedAmount = getSelectedChipAmount();
         let stackSelectionConfirmed = !!(stackBtn && isStackChipButtonSelected(stackBtn));
@@ -4012,10 +4032,13 @@
         }
         if (stackBtn) {
             rememberSelectedStackChip(chipValue);
+            const settleWaitMs = Math.max(0, CHIP_SELECTION_SETTLE_MS - (Date.now() - selectionDispatchedAt));
+            if (settleWaitMs > 0) await sleep(settleWaitMs);
             pushBetLog('info', 'select_chip_ok_stack', {
                 planned: formatMoney(chipValue),
                 selected: Number.isFinite(selectedAmount) && selectedAmount > 0 ? formatMoney(selectedAmount) : 'unknown',
                 signal: stackSelectionConfirmed || isStackChipButtonSelected(stackBtn) ? 'selected_ring_or_attribute' : 'dispatch_memory',
+                settleWaitMs,
             });
             return true;
         }
@@ -4031,9 +4054,12 @@
             console.warn(`[AutoTrigger] chip ${chipValue} selection not verified; selectable=[${selectable}]`);
             return false;
         }
+        const settleWaitMs = Math.max(0, CHIP_SELECTION_SETTLE_MS - (Date.now() - selectionDispatchedAt));
+        if (settleWaitMs > 0) await sleep(settleWaitMs);
         pushBetLog('info', 'select_chip_ok_tray', {
             planned: formatMoney(chipValue),
             selected: formatMoney(getSelectedChipAmount()),
+            settleWaitMs,
         });
         return true;
     }

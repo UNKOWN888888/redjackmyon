@@ -1164,9 +1164,9 @@
         const mainBetChipLayer = directSpot?.querySelector?.('.jc_iJ,.jc_je');
         return Array.from(new Set([
             directSeat,
-            directSpot,
             mainBetGhost,
             mainBetSvg,
+            directSpot,
             mainBetChipLayer,
             spot,
             info?.element,

@@ -155,15 +155,18 @@
     function getBetClickProbeLabel(element) {
         if (!element || !isVisible(element)) return 'probe=null';
         const boundary = getBetClickBoundary(element);
-        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
-        const point = getSafeBetClickPoint(preferredTarget);
-        const topEl = preferredTarget.ownerDocument?.elementFromPoint?.(point.x, point.y);
+        const pointTarget = isSafeBetDispatchTarget(element, boundary)
+            ? element
+            : (normalizeBetClickTarget(element, boundary) || element);
+        const point = getSafeBetClickPoint(pointTarget);
+        const topEl = pointTarget.ownerDocument?.elementFromPoint?.(point.x, point.y);
         const dispatchTarget = getBetDispatchTarget(element, boundary, topEl);
-        return `${Math.round(point.x)},${Math.round(point.y)}:hit=${getElementLabel(topEl)},dispatch=${getElementLabel(dispatchTarget)}`;
+        const hitScope = !topEl ? 'none' : (!boundary ? 'unbounded' : (boundary.contains?.(topEl) ? 'inside' : 'outside'));
+        return `${Math.round(point.x)},${Math.round(point.y)}:hit=${getElementLabel(topEl)}(${hitScope}),candidate=${getElementLabel(element)},boundary=${getElementLabel(boundary)},dispatch=${getElementLabel(dispatchTarget)}`;
     }
 
     function getBetClickProfile(attempt = 0) {
-        return ['mouse', 'native', 'touch', 'mouse'][Math.max(0, attempt) % 4];
+        return ['mouse', 'mouse', 'touch', 'native'][Math.max(0, attempt) % 4];
     }
 
     function normalizeBetClickTarget(element, boundary) {
@@ -221,10 +224,10 @@
     function getBetDispatchTarget(element, boundary, topEl) {
         const preferredTarget = normalizeBetClickTarget(element, boundary);
         const candidates = [
-            preferredTarget,
-            normalizeBetClickTarget(topEl, boundary),
-            element,
             topEl,
+            element,
+            normalizeBetClickTarget(topEl, boundary),
+            preferredTarget,
         ];
         return candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary)) || null;
     }
@@ -233,8 +236,10 @@
         if (!element || !isVisible(element)) return false;
         const doc = element.ownerDocument || document;
         const boundary = getBetClickBoundary(element);
-        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
-        const points = getSafeBetClickPoints(preferredTarget);
+        const pointTarget = isSafeBetDispatchTarget(element, boundary)
+            ? element
+            : (normalizeBetClickTarget(element, boundary) || element);
+        const points = getSafeBetClickPoints(pointTarget);
         const attempt = Math.max(0, Math.floor(options.attempt || 0));
         const profile = options.profile || getBetClickProfile(attempt);
         const orderedPoints = points.length > 0
