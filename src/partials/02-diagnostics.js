@@ -267,10 +267,39 @@
         return true;
     }
 
+    function persistBetDebugLogNow() {
+        if (betDebugLogPersistTimer !== null) {
+            clearTimeout(betDebugLogPersistTimer);
+            betDebugLogPersistTimer = null;
+        }
+        try {
+            const result = GM_setValue(BET_DEBUG_LOG_STORAGE_KEY, betDebugLog.slice(0, BET_DEBUG_LOG_LIMIT));
+            if (result && typeof result.catch === 'function') {
+                result.catch(error => console.warn('[AutoTrigger] recent bet log persist failed:', error));
+            }
+            return true;
+        } catch (error) {
+            console.warn('[AutoTrigger] recent bet log persist failed:', error);
+            return false;
+        }
+    }
+
+    function scheduleBetDebugLogPersist(immediate = false) {
+        if (immediate) return persistBetDebugLogNow();
+        if (betDebugLogPersistTimer !== null) return true;
+        betDebugLogPersistTimer = setTimeout(() => {
+            betDebugLogPersistTimer = null;
+            persistBetDebugLogNow();
+        }, BET_DEBUG_LOG_PERSIST_DELAY_MS);
+        return true;
+    }
+
     function pushBetLog(level, message, data = null) {
         const normalized = normalizeBetLogData(data);
         const item = {
             sequence: ++betLogSequence,
+            sessionId: SCRIPT_SESSION_ID,
+            scriptVersion: SCRIPT_VERSION,
             at: Date.now(),
             level: level || 'info',
             stage: betRuntimeStage,
@@ -279,12 +308,32 @@
         };
         betDebugLog.unshift(item);
         if (betDebugLog.length > BET_DEBUG_LOG_LIMIT) betDebugLog.length = BET_DEBUG_LOG_LIMIT;
+        scheduleBetDebugLogPersist(item.level === 'error' || item.level === 'warn');
 
         const suffix = normalized && formatBetLogValue(normalized)
             ? ` ${formatBetLogValue(normalized)}`
             : '';
         const method = console[item.level] ? item.level : 'log';
         console[method](`[AutoTrigger][BetLog] ${item.message}${suffix}`);
+    }
+
+    function getRecentBetLogExportRows(oldestFirst = false, now = Date.now()) {
+        const rows = (betDebugLog || []).slice(0, BET_DEBUG_LOG_LIMIT).map(item => {
+            const at = Number.isFinite(item.at) ? item.at : now;
+            return {
+                sequence: Number.isFinite(item.sequence) ? item.sequence : 0,
+                sessionId: item.sessionId || 'legacy',
+                scriptVersion: item.scriptVersion || 'unknown',
+                at: new Date(at).toISOString(),
+                ageMs: Math.max(0, now - at),
+                level: item.level || 'info',
+                stage: item.stage || 'idle',
+                stageLabel: getBetRuntimeStageLabel(item.stage),
+                message: item.message || '',
+                data: item.data ?? null,
+            };
+        });
+        return oldestFirst ? rows.reverse() : rows;
     }
 
     function getBetDebugLogHtml(limit = 8) {
@@ -368,6 +417,9 @@
                 clickCandidates: getSeatBetClickCandidates(seat).slice(0, 8).map(getElementLabel),
             };
         }, { seat: n, error: 'seat_snapshot_failed' }));
+        const exportNow = Date.now();
+        const logsNewestFirst = getRecentBetLogExportRows(false, exportNow);
+        const recentExecutionLogs = logsNewestFirst.slice().reverse();
 
         return {
             exportedAt: new Date().toISOString(),
@@ -405,6 +457,9 @@
                 runtimeStageAt: new Date(betRuntimeStageAt).toISOString(),
                 runtimeStageAgeMs: Math.max(0, Date.now() - betRuntimeStageAt),
                 runtimeStageData: betRuntimeStageData,
+                sessionId: SCRIPT_SESSION_ID,
+                sessionStartedAt: new Date(SCRIPT_SESSION_STARTED_AT).toISOString(),
+                sessionAgeMs: Math.max(0, exportNow - SCRIPT_SESSION_STARTED_AT),
                 verifiedBetProgress: verifiedBetProgress ? {
                     ...verifiedBetProgress,
                     updatedAt: new Date(verifiedBetProgress.updatedAt).toISOString(),
@@ -432,41 +487,152 @@
                 };
             }, null),
             seats,
-            logs: (betDebugLog || []).map(item => ({
-                sequence: item.sequence,
-                at: new Date(item.at).toISOString(),
-                ageMs: Math.max(0, Date.now() - item.at),
-                level: item.level,
-                stage: item.stage,
-                message: item.message,
-                data: item.data,
-            })),
+            logWindow: {
+                count: recentExecutionLogs.length,
+                capacity: BET_DEBUG_LOG_LIMIT,
+                retentionHours: BET_DEBUG_LOG_RETENTION_MS / (60 * 60 * 1000),
+                order: 'oldest_to_newest',
+                oldestAt: recentExecutionLogs[0]?.at || null,
+                newestAt: recentExecutionLogs[recentExecutionLogs.length - 1]?.at || null,
+            },
+            recentExecutionLogs,
+            logs: logsNewestFirst,
         };
     }
 
-    function exportBetDebugLog() {
+    function downloadBetLogWithTampermonkey(url, filename) {
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            let handle = null;
+            const finish = (callback, value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                callback(value);
+            };
+            const timer = setTimeout(() => {
+                try { handle?.abort?.(); } catch (_) {}
+                finish(reject, new Error('Tampermonkey 다운로드 응답 시간 초과'));
+            }, 8000);
+            try {
+                handle = GM_download({
+                    url,
+                    name: filename,
+                    saveAs: false,
+                    conflictAction: 'uniquify',
+                    onload: () => finish(resolve, true),
+                    onerror: error => finish(reject, new Error(`Tampermonkey 다운로드 실패: ${error?.error || error?.details || 'unknown'}`)),
+                    ontimeout: () => finish(reject, new Error('Tampermonkey 다운로드 시간 초과')),
+                    onabort: () => finish(reject, new Error('Tampermonkey 다운로드 취소')),
+                });
+            } catch (error) {
+                finish(reject, error);
+            }
+        });
+    }
+
+    function triggerBrowserBetLogDownload(url, filename) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        try {
+            link.click();
+            return true;
+        } finally {
+            link.remove();
+        }
+    }
+
+    async function copyBetLogTextToClipboard(text) {
+        try {
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(text, { type: 'text', mimetype: 'application/json' });
+                return true;
+            }
+        } catch (error) {
+            console.warn('[AutoTrigger] GM clipboard copy failed:', error);
+        }
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (error) {
+            console.warn('[AutoTrigger] browser clipboard copy failed:', error);
+        }
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand?.('copy') === true;
+            textarea.remove();
+            return copied;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async function exportBetDebugLog() {
         pushBetLog('info', 'bet_log_export_requested', {
             logs: (betDebugLog || []).length,
             reason: lastFailReason || 'none',
         });
+        persistBetDebugLogNow();
         const payload = getBetDebugExportPayload();
         const text = JSON.stringify(payload, null, 2);
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         const filename = `autotrigger-betlog-${stamp}.json`;
         const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
         const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        setTimeout(() => {
-            URL.revokeObjectURL(url);
-            link.remove();
-        }, 1000);
-        console.log(`[AutoTrigger] bet log exported: ${filename}`);
-        return filename;
+        let method = '';
+        let copied = false;
+        let tampermonkeyError = '';
+        try {
+            if (typeof GM_download === 'function') {
+                try {
+                    await downloadBetLogWithTampermonkey(url, filename);
+                    method = 'tampermonkey_download';
+                } catch (error) {
+                    tampermonkeyError = error?.message || String(error);
+                    console.warn('[AutoTrigger] Tampermonkey log download failed; using browser fallback:', error);
+                }
+            }
+
+            if (!method) {
+                const copyPromise = copyBetLogTextToClipboard(text);
+                const browserRequested = triggerBrowserBetLogDownload(url, filename);
+                copied = await copyPromise;
+                method = browserRequested ? 'browser_download' : (copied ? 'clipboard' : '');
+            }
+            if (!method) throw new Error('로그 파일 저장과 클립보드 복사에 모두 실패했습니다.');
+
+            pushBetLog('info', 'bet_log_export_completed', {
+                filename,
+                logs: payload.logWindow.count,
+                method,
+                copied: copied ? 'Y' : 'N',
+                tampermonkeyError: tampermonkeyError || 'none',
+            });
+            console.log(`[AutoTrigger] recent bet log exported: ${filename} (${payload.logWindow.count} logs, ${method})`);
+            return {
+                filename,
+                logCount: payload.logWindow.count,
+                method,
+                copied,
+                tampermonkeyError,
+            };
+        } finally {
+            if (method === 'tampermonkey_download') {
+                URL.revokeObjectURL(url);
+            } else {
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }
+        }
     }
 
     function emptyPlan() {

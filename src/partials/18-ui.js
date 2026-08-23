@@ -156,7 +156,7 @@
                     <div class="at-actions">
                         <button id="at-save" class="at-button" type="button">저장</button>
                         <button id="at-setup-bet" class="at-button at-primary" type="button">베팅 설정</button>
-                        <button id="at-export-log" class="at-button" type="button">로그 내보내기</button>
+                        <button id="at-export-log" class="at-button" type="button">최근 로그 내보내기</button>
                         <button id="at-script-toggle" class="at-button" type="button">스크립트 정지</button>
                         <button id="at-reset" class="at-button" type="button">상태 초기화</button>
                     </div>
@@ -247,11 +247,37 @@
             setupBetAmount(true).catch(e => console.error('[AutoTrigger] bet setup error:', e));
         });
 
-        document.getElementById('at-export-log').addEventListener('click', () => {
+        let exportButtonResetTimer = null;
+        document.getElementById('at-export-log').addEventListener('click', async event => {
+            const button = event.currentTarget;
+            if (button.disabled) return;
+            if (exportButtonResetTimer !== null) {
+                clearTimeout(exportButtonResetTimer);
+                exportButtonResetTimer = null;
+            }
+            button.disabled = true;
+            button.textContent = '내보내는 중...';
             try {
-                exportBetDebugLog();
+                const result = await exportBetDebugLog();
+                const copied = result.copied ? ' / 복사 완료' : '';
+                const status = result.method === 'tampermonkey_download' ? '저장 완료' : '다운로드 요청';
+                button.textContent = `${status} ${result.logCount}건${copied}`;
+                button.title = result.filename;
             } catch (e) {
                 console.error('[AutoTrigger] bet log export failed:', e);
+                pushBetLog('error', 'bet_log_export_failed', {
+                    error: e?.message || String(e),
+                    logs: betDebugLog.length,
+                });
+                button.textContent = '내보내기 실패';
+                button.title = e?.message || String(e);
+            } finally {
+                button.disabled = false;
+                exportButtonResetTimer = setTimeout(() => {
+                    exportButtonResetTimer = null;
+                    button.textContent = '최근 로그 내보내기';
+                    button.title = '';
+                }, 3500);
             }
         });
 
@@ -399,6 +425,15 @@
         updateUI();
         setInterval(updateUI, 250);
     }
+
+    const restoredBetLogCount = betDebugLog.length;
+    pushBetLog('info', 'script_session_started', {
+        sessionId: SCRIPT_SESSION_ID,
+        version: SCRIPT_VERSION,
+        restoredLogs: restoredBetLogCount,
+        frame: SCRIPT_FRAME_MODE,
+        game: SCRIPT_GAME_VERSION,
+    });
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', createUI);

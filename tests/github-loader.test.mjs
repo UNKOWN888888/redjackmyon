@@ -82,6 +82,8 @@ assert.throws(
 assert.match(loaderSource, /@connect\s+raw\.githubusercontent\.com/);
 assert.match(loaderSource, /@grant\s+GM_xmlhttpRequest/);
 assert.match(loaderSource, /@grant\s+GM_info/);
+assert.match(loaderSource, /@grant\s+GM_download/);
+assert.match(loaderSource, /@grant\s+GM_setClipboard/);
 assert.match(loaderSource, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
 assert.match(loaderSource, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
 assert.match(loaderSource, /@match\s+https:\/\/client\.fcxlljmmbqtczjya\.net\/\*/);

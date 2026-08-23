@@ -12,12 +12,14 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.91';
+    const SCRIPT_VERSION = '1.92';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';
     if (document.documentElement?.hasAttribute?.(SCRIPT_ACTIVE_ATTRIBUTE)) return;
     document.documentElement?.setAttribute?.(SCRIPT_ACTIVE_ATTRIBUTE, 'true');
+    const SCRIPT_SESSION_STARTED_AT = Date.now();
+    const SCRIPT_SESSION_ID = `${SCRIPT_SESSION_STARTED_AT.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     function getScriptLoadState() {
         const info = globalThis.__BLACKJACKT_LOADER_INFO__;

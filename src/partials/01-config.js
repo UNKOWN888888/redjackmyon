@@ -59,7 +59,10 @@
     const SIT_PROMPT_CACHE_MS = 30;
     // [1.39] verify polling 가속
     const VERIFY_POLL_MS = 12;
-    const BET_DEBUG_LOG_LIMIT = 200;
+    const BET_DEBUG_LOG_LIMIT = 500;
+    const BET_DEBUG_LOG_STORAGE_KEY = 'betDebugLogRecentV1';
+    const BET_DEBUG_LOG_RETENTION_MS = 24 * 60 * 60 * 1000;
+    const BET_DEBUG_LOG_PERSIST_DELAY_MS = 120;
     const SINGLE_CHIP_DOM_PART_LIMIT = 8;
     const SELECTED_STACK_CHIP_TTL_MS = 2500;
     const CHIP_SELECTION_VERIFY_MS = 160;
@@ -122,8 +125,34 @@
     let lastSelectedStackChipAt = 0;
     let betClickGuardUntil = 0;
     let lastBetClickGuardReason = '';
-    let betDebugLog = [];
-    let betLogSequence = 0;
+    function loadRecentBetDebugLog() {
+        try {
+            const stored = GM_getValue(BET_DEBUG_LOG_STORAGE_KEY, []);
+            if (!Array.isArray(stored)) return [];
+            const cutoff = Date.now() - BET_DEBUG_LOG_RETENTION_MS;
+            return stored
+                .filter(item => item && Number.isFinite(item.at) && item.at >= cutoff && typeof item.message === 'string')
+                .sort((a, b) => b.at - a.at)
+                .slice(0, BET_DEBUG_LOG_LIMIT)
+                .map(item => ({
+                    sequence: Number.isFinite(item.sequence) ? item.sequence : 0,
+                    sessionId: typeof item.sessionId === 'string' ? item.sessionId : 'legacy',
+                    scriptVersion: typeof item.scriptVersion === 'string' ? item.scriptVersion : 'unknown',
+                    at: item.at,
+                    level: typeof item.level === 'string' ? item.level : 'info',
+                    stage: typeof item.stage === 'string' ? item.stage : 'idle',
+                    message: item.message,
+                    data: item.data ?? null,
+                }));
+        } catch (error) {
+            console.warn('[AutoTrigger] recent bet log restore failed:', error);
+            return [];
+        }
+    }
+
+    let betDebugLog = loadRecentBetDebugLog();
+    let betLogSequence = betDebugLog.reduce((max, item) => Math.max(max, item.sequence || 0), 0);
+    let betDebugLogPersistTimer = null;
     let betRuntimeStage = 'idle';
     let betRuntimeStageAt = Date.now();
     let betRuntimeStageData = {};

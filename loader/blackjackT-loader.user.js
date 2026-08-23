@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      2.0.5
+// @version      2.0.6
 // @description  공개 GitHub 저장소의 BlackjackT 빌드 파일을 검증·캐시하여 빠르게 실행하는 로더
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -17,6 +17,8 @@
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
+// @grant        GM_download
+// @grant        GM_setClipboard
 // @connect      raw.githubusercontent.com
 // @run-at       document-start
 // ==/UserScript==
@@ -297,9 +299,16 @@
         const runner = new Function(
             'GM_getValue',
             'GM_setValue',
+            'GM_download',
+            'GM_setClipboard',
             `${record.source}\n//# sourceURL=${record.url}`,
         );
-        runner(GM_getValue, GM_setValue);
+        runner(
+            GM_getValue,
+            GM_setValue,
+            typeof GM_download === 'function' ? GM_download : undefined,
+            typeof GM_setClipboard === 'function' ? GM_setClipboard : undefined,
+        );
         if (!document.documentElement?.hasAttribute?.(MAIN_ACTIVE_ATTRIBUTE)) {
             throw new Error('원격 스크립트가 게임 문서에서 시작되지 않았습니다.');
         }
