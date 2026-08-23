@@ -1066,11 +1066,35 @@
                     }
                     if (areObservedStatesUnchangedSafe(recheckedStates)) {
                         pushBetLog('warn', 'broadcast_single_unchanged_guard', {
+                            clickSeat: clickSeatNumber,
+                            seats: targets.join(','),
                             chip: formatMoney(chipValue),
+                            selected: formatMoney(getEffectiveSelectedChipAmount()),
+                            attempt: attempt + 1,
+                            target: targetTag,
+                            candidates: candidateTags,
+                            probe,
+                            walletBefore: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                            walletAfter: Number.isFinite(walletAfterClick?.amount) ? formatMoney(walletAfterClick.amount) : 'unknown',
+                            walletRechecked: Number.isFinite(walletRechecked?.amount) ? formatMoney(walletRechecked.amount) : 'unknown',
+                            expectedWalletAfter: Number.isFinite(expectedWalletBaseAmount)
+                                ? formatMoney(expectedWalletBaseAmount + chipValue * targets.length)
+                                : 'unknown',
                             observed: rechecked,
                         });
                         markBetClickGuard('broadcast_single_unverified_wait', {
+                            clickSeat: clickSeatNumber,
+                            seats: targets.join(','),
                             chip: formatMoney(chipValue),
+                            selected: formatMoney(getEffectiveSelectedChipAmount()),
+                            attempt: attempt + 1,
+                            target: targetTag,
+                            probe,
+                            walletBefore: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                            walletRechecked: Number.isFinite(walletRechecked?.amount) ? formatMoney(walletRechecked.amount) : 'unknown',
+                            expectedWalletAfter: Number.isFinite(expectedWalletBaseAmount)
+                                ? formatMoney(expectedWalletBaseAmount + chipValue * targets.length)
+                                : 'unknown',
                             observed: rechecked,
                         });
                         console.warn(`[AutoTrigger] broadcast click unchanged (observed=${rechecked}); guard before any retry`);

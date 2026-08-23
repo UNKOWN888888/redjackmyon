@@ -306,6 +306,98 @@ assert.equal(stackSandbox.isSelectedChipSafeForSeatClick(7500, 7500), true);
 assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true);
 
 {
+  const directSeat = {
+    getAttribute: name => name === 'data-testid' ? 'mainbetSeat_5' : null,
+    closest: () => null,
+  };
+  const directSpot = {
+    querySelector: () => null,
+    closest: () => null,
+  };
+  const rootSeat = {
+    querySelector: () => null,
+    closest: () => null,
+  };
+  const doc = {
+    querySelector: selector => {
+      if (selector === '[data-testid="mainbetSeat_5"]') return directSeat;
+      if (selector === '[data-testid="mainbet_5"]') return directSpot;
+      if (selector === '[data-testid="seat_5"]') return rootSeat;
+      return null;
+    },
+  };
+  const sourceSeat = { ownerDocument: doc, querySelector: () => null };
+  const candidateSandbox = loadPartial('07-seats.js', {
+    SINGLE_CHIP_DOM_PART_LIMIT: 8,
+    SEAT_CLOSE_ICON_SELECTOR: '[data-testid="close-icon"]',
+  });
+  candidateSandbox.getSeatNumber = () => 5;
+  candidateSandbox.findMainBetSpot = () => directSpot;
+  candidateSandbox.getSeatWrapper = () => rootSeat;
+  candidateSandbox.getSeatBetAmountInfo = () => null;
+  candidateSandbox.isVisible = () => true;
+  candidateSandbox.isDisabledLike = () => false;
+
+  const candidates = candidateSandbox.getSeatBetClickCandidates(sourceSeat);
+  assert.equal(candidates[0], directSeat, 'the stable mainbetSeat element must be the primary click candidate');
+  assert.equal(candidates[1], directSpot, 'the enclosing mainbet spot must be the first fallback candidate');
+}
+
+{
+  const dispatches = [];
+  const directSpot = { contains: () => true };
+  const directSeat = {
+    ownerDocument: null,
+    getAttribute: name => name === 'data-testid' ? 'mainbetSeat_5' : null,
+    closest: selector => {
+      if (selector === '[data-testid^="mainbet_"]') return directSpot;
+      if (selector.includes('[data-testid^="mainbetSeat_"]')) return directSeat;
+      return null;
+    },
+  };
+  const svgPath = {
+    ownerDocument: null,
+    getAttribute: name => name === 'data-testid' ? 'ghost-chip' : null,
+    closest: selector => {
+      if (selector === '[data-testid^="mainbet_"]') return directSpot;
+      if (selector.includes('[data-testid^="mainbetSeat_"]')) return directSeat;
+      return null;
+    },
+  };
+  const doc = { elementFromPoint: () => svgPath };
+  directSeat.ownerDocument = doc;
+  svgPath.ownerDocument = doc;
+
+  const clickSandbox = loadPartial('04-clicks.js', {
+    SEAT_CLOSE_ICON_SELECTOR: '[data-testid="close-icon"]',
+    lastBetClickDebug: '',
+    lastBetClickDebugAt: 0,
+    Date,
+  });
+  clickSandbox.isVisible = () => true;
+  clickSandbox.getSafeBetClickPoints = () => [{ x: 27, y: 27 }];
+  clickSandbox.fireFullClick = (target, x, y, options) => {
+    dispatches.push({ target, x, y, options });
+    return true;
+  };
+  clickSandbox.invalidateDynamicCaches = () => {};
+
+  assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 0 }), true);
+  assert.equal(dispatches[0].target, directSeat, 'the event must be dispatched to mainbetSeat, not the SVG path under the pointer');
+  assert.equal(dispatches[0].options.profile, 'mouse');
+  assert.equal(dispatches[0].options.nativeClick, false);
+
+  assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 1 }), true);
+  assert.equal(dispatches[1].target, directSeat);
+  assert.equal(dispatches[1].options.nativeClick, true, 'the second no-effect attempt must use a single native click fallback');
+
+  assert.equal(clickSandbox.robustBetClick(svgPath, { attempt: 2 }), true);
+  assert.equal(dispatches[2].target, directSeat);
+  assert.equal(dispatches[2].options.profile, 'touch');
+  assert.match(clickSandbox.getBetClickProbeLabel(svgPath), /hit=ghost-chip,dispatch=mainbetSeat_5/);
+}
+
+{
   let walletAmount = 60000;
   let sentClicks = 0;
   const seats = new Map([1, 2, 3, 4].map(seatNumber => [seatNumber, { seatNumber }]));

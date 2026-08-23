@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.90
+// @version      1.91
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 다중 칩 전환과 검증된 부분 베팅 재개를 지원하고, 좌석 집합·지갑 총액·클릭 단계를 세밀하게 기록합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -32,7 +32,7 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.90';
+    const SCRIPT_VERSION = '1.91';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';
@@ -293,6 +293,9 @@
         wallet_total_mismatch_before_autoplay: '자동베팅 전 지갑 총액이 계획과 다름',
         broadcast_seat_set_mismatch: '브로드캐스트 좌석 집합이 계획과 다름',
         broadcast_seat_set_mismatch_before_bet: '칩 클릭 직전 좌석 집합이 바뀜',
+        broadcast_single_unverified_wait: '칩 클릭 이벤트가 좌석과 지갑에 반영되지 않아 안전 대기',
+        broadcast_click_unverified_wait: '연속 칩 클릭 이벤트가 좌석과 지갑에 반영되지 않아 안전 대기',
+        individual_click_unverified_wait: '개별 좌석 칩 클릭이 반영되지 않아 안전 대기',
         chips_missing: '베팅 칩을 찾지 못함',
         no_chips_detected: '베팅 칩을 찾지 못함',
         autoplay_btn_missing: '자동베팅 버튼을 찾지 못함',
@@ -1260,13 +1263,16 @@
 
     function getBetClickProbeLabel(element) {
         if (!element || !isVisible(element)) return 'probe=null';
-        const point = getSafeBetClickPoint(element);
-        const topEl = element.ownerDocument?.elementFromPoint?.(point.x, point.y);
-        return `${Math.round(point.x)},${Math.round(point.y)}:${getElementLabel(topEl)}`;
+        const boundary = getBetClickBoundary(element);
+        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
+        const point = getSafeBetClickPoint(preferredTarget);
+        const topEl = preferredTarget.ownerDocument?.elementFromPoint?.(point.x, point.y);
+        const dispatchTarget = getBetDispatchTarget(element, boundary, topEl);
+        return `${Math.round(point.x)},${Math.round(point.y)}:hit=${getElementLabel(topEl)},dispatch=${getElementLabel(dispatchTarget)}`;
     }
 
     function getBetClickProfile(attempt = 0) {
-        return attempt % 2 === 0 ? 'touch' : 'mouse';
+        return ['mouse', 'native', 'touch', 'mouse'][Math.max(0, attempt) % 4];
     }
 
     function normalizeBetClickTarget(element, boundary) {
@@ -1321,11 +1327,23 @@
         return true;
     }
 
+    function getBetDispatchTarget(element, boundary, topEl) {
+        const preferredTarget = normalizeBetClickTarget(element, boundary);
+        const candidates = [
+            preferredTarget,
+            normalizeBetClickTarget(topEl, boundary),
+            element,
+            topEl,
+        ];
+        return candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary)) || null;
+    }
+
     function robustBetClick(element, options = {}) {
         if (!element || !isVisible(element)) return false;
-        const points = getSafeBetClickPoints(element);
         const doc = element.ownerDocument || document;
         const boundary = getBetClickBoundary(element);
+        const preferredTarget = normalizeBetClickTarget(element, boundary) || element;
+        const points = getSafeBetClickPoints(preferredTarget);
         const attempt = Math.max(0, Math.floor(options.attempt || 0));
         const profile = options.profile || getBetClickProfile(attempt);
         const orderedPoints = points.length > 0
@@ -1334,13 +1352,7 @@
 
         for (const { x, y } of orderedPoints) {
             const topEl = doc.elementFromPoint?.(x, y);
-            const candidates = [
-                topEl,
-                normalizeBetClickTarget(topEl, boundary),
-                normalizeBetClickTarget(element, boundary),
-                element,
-            ];
-            const target = candidates.find(candidate => isSafeBetDispatchTarget(candidate, boundary));
+            const target = getBetDispatchTarget(element, boundary, topEl);
             if (!target) continue;
 
             if (lastBetClickDebug && Date.now() - lastBetClickDebugAt < 1000 && !/\sp\d+\/t\d+/.test(lastBetClickDebug)) {
@@ -1348,7 +1360,11 @@
                 lastBetClickDebugAt = Date.now();
             }
 
-            const success = fireFullClick(target, x, y, { profile, touch: profile === 'touch' });
+            const success = fireFullClick(target, x, y, {
+                profile: profile === 'native' ? 'mouse' : profile,
+                touch: profile === 'touch',
+                nativeClick: profile === 'native',
+            });
             if (success) {
                 invalidateDynamicCaches();
                 return true;
@@ -3412,11 +3428,11 @@
             directSpot?.querySelector?.(`[data-testid="mainbetSeat_${n}"] svg`);
         const mainBetChipLayer = directSpot?.querySelector?.('.jc_iJ,.jc_je');
         return Array.from(new Set([
+            directSeat,
+            directSpot,
             mainBetGhost,
             mainBetSvg,
-            directSeat,
             mainBetChipLayer,
-            directSpot,
             spot,
             info?.element,
             directRootSeat,
@@ -4766,11 +4782,35 @@
                     }
                     if (areObservedStatesUnchangedSafe(recheckedStates)) {
                         pushBetLog('warn', 'broadcast_single_unchanged_guard', {
+                            clickSeat: clickSeatNumber,
+                            seats: targets.join(','),
                             chip: formatMoney(chipValue),
+                            selected: formatMoney(getEffectiveSelectedChipAmount()),
+                            attempt: attempt + 1,
+                            target: targetTag,
+                            candidates: candidateTags,
+                            probe,
+                            walletBefore: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                            walletAfter: Number.isFinite(walletAfterClick?.amount) ? formatMoney(walletAfterClick.amount) : 'unknown',
+                            walletRechecked: Number.isFinite(walletRechecked?.amount) ? formatMoney(walletRechecked.amount) : 'unknown',
+                            expectedWalletAfter: Number.isFinite(expectedWalletBaseAmount)
+                                ? formatMoney(expectedWalletBaseAmount + chipValue * targets.length)
+                                : 'unknown',
                             observed: rechecked,
                         });
                         markBetClickGuard('broadcast_single_unverified_wait', {
+                            clickSeat: clickSeatNumber,
+                            seats: targets.join(','),
                             chip: formatMoney(chipValue),
+                            selected: formatMoney(getEffectiveSelectedChipAmount()),
+                            attempt: attempt + 1,
+                            target: targetTag,
+                            probe,
+                            walletBefore: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                            walletRechecked: Number.isFinite(walletRechecked?.amount) ? formatMoney(walletRechecked.amount) : 'unknown',
+                            expectedWalletAfter: Number.isFinite(expectedWalletBaseAmount)
+                                ? formatMoney(expectedWalletBaseAmount + chipValue * targets.length)
+                                : 'unknown',
                             observed: rechecked,
                         });
                         console.warn(`[AutoTrigger] broadcast click unchanged (observed=${rechecked}); guard before any retry`);
