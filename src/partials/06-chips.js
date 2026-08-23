@@ -115,7 +115,35 @@
         return !!(root && /\boo_ow\b/.test(root.className || ''));
     }
 
+    function isStackChipButtonSelected(button) {
+        if (!button) return false;
+        const explicitValues = [
+            button.getAttribute?.('aria-pressed'),
+            button.getAttribute?.('aria-selected'),
+            button.getAttribute?.('data-selected'),
+            button.getAttribute?.('data-active'),
+        ].map(value => String(value || '').toLowerCase());
+        if (explicitValues.includes('true')) return true;
+
+        const testId = button.getAttribute?.('data-testid') || '';
+        const ring = testId
+            ? button.querySelector?.(`[data-testid="${testId}-ring"]`)
+            : null;
+        return !!(ring && isVisible(ring));
+    }
+
+    function getSelectedStackChipAmount() {
+        const selected = getChipStackButtons()
+            .filter(isStackChipButtonSelected)
+            .map(getChipStackButtonValue)
+            .filter(value => Number.isFinite(value) && value > 0);
+        const unique = Array.from(new Set(selected));
+        return unique.length === 1 ? unique[0] : 0;
+    }
+
     function getSelectedChipAmount() {
+        const stackAmount = getSelectedStackChipAmount();
+        if (stackAmount > 0) return stackAmount;
         for (const chip of getTrayChips()) {
             if (isTrayChipSelected(chip)) return getTrayChipValue(chip);
         }

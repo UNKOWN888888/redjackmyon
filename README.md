@@ -12,7 +12,7 @@ GitHub 저장소: [UNKOWN888888/redjackmyon](https://github.com/UNKOWN888888/red
 2. 이 프로젝트 전체를 [redjackmyon](https://github.com/UNKOWN888888/redjackmyon)의 `main` 브랜치에 올립니다. `dist/blackjackT.user.js` 파일도 반드시 포함해야 합니다.
 3. [GitHub Raw 로더](https://raw.githubusercontent.com/UNKOWN888888/redjackmyon/main/loader/blackjackT-loader.user.js)를 Tampermonkey에 설치합니다.
 4. 다운로드 폴더의 로더를 설치해도 기본 저장소가 `UNKOWN888888/redjackmyon`으로 설정되어 별도 주소 입력 없이 실행됩니다.
-5. 상태창에 `로드: GitHub 원격` 또는 `로드: GitHub 캐시`가 표시되는지 확인합니다.
+5. 상태창 헤더에 스크립트 버전과 `GitHub 원격` 또는 `GitHub 캐시`가 표시되는지 확인합니다.
 
 비공개 저장소는 로그인 토큰 없이는 raw 파일을 읽을 수 없습니다. 토큰을 userscript에 넣는 것은 계정 유출 위험이 있으므로 이 로더는 공개 저장소만 사용합니다.
 
@@ -23,7 +23,7 @@ GitHub 저장소: [UNKOWN888888/redjackmyon](https://github.com/UNKOWN888888/red
 3. 변경된 원본, 테스트, `dist/blackjackT.user.js`를 GitHub에 올립니다.
 4. Tampermonkey 메뉴에서 `GitHub 최신본 받기`를 누른 뒤 게임을 새로고침합니다.
 
-일반 새로고침에서도 캐시를 즉시 실행한 뒤 최신본을 받습니다. 이 경우 새 버전은 상태창에 `업데이트 v... 대기`로 표시되고 다음 새로고침에 적용됩니다.
+일반 새로고침에서도 캐시를 즉시 실행한 뒤 최신본을 받습니다. 이 경우 새 버전은 상태창 헤더에 `업데이트 v... 대기`로 표시되고 다음 새로고침에 적용됩니다.
 
 ## 주요 명령
 

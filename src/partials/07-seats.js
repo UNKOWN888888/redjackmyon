@@ -413,10 +413,12 @@
         if (summary.seats.length !== expected || summary.amounts.length !== expected) return false;
         if (!getBroadcastSeatTargetState(summary.seats).exact) return false;
         if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
+        const verifiedProgressComplete = typeof isVerifiedBetProgressComplete === 'function' &&
+            isVerifiedBetProgressComplete(plan, summary.seats);
         return summary.amounts.every(item =>
             item.hasChip &&
             !item.hasGhost &&
-            (!Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
+            (verifiedProgressComplete || !Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
         );
     }
 
@@ -696,6 +698,7 @@
         const expectedSeats = getMaxSeatCount();
         const expectedActiveSeats = Math.max(1, toInt(expectedPlan.used, expectedSeats, 1, 7));
         const summary = getTargetSeatBetSummary(numbers, expectedPlan);
+        if (isBetSummaryWalletConfirmed(summary, expectedPlan)) return false;
         if (summary.seats.length > expectedActiveSeats) return true;
         if (summary.ambiguousCount > 0) return false;
         if (summary.detectedCount <= 0) {

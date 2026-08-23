@@ -67,6 +67,7 @@
         if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
             const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
             if (recovery.recoverable) {
+                logBetMismatchSnapshot(recovery.reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_unknown');
                 console.warn(`[AutoTrigger] 좌석 금액 미인식 + 지갑 상태 ${recovery.variance.status} ${formatMoney(recovery.variance.reading.amount)}/${formatMoney(recovery.variance.expected)} → 재설정`);
                 if (markBetStateNeedsRecovery(recovery.reason)) runSequence();
                 return;
@@ -75,17 +76,24 @@
                 console.warn('[AutoTrigger] visible chip exists but amount is unknown; wait instead of adding more chips');
             }
             lastFailReason = 'bet_amount_unknown_current';
+            logBetMismatchSnapshot(lastFailReason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_unknown_paused');
+            setBetRuntimeStage('blocked', {
+                reason: lastFailReason,
+                label: getFailReasonLabel(lastFailReason),
+            }, 'warn');
             return;
         }
         if (isTargetBetTotalMismatch(activeSeatNumbers, expectedPlan)) {
             const expectedTotal = expectedPlan.totalActual;
             const reason = betSummary.total > expectedTotal ? 'bet_total_over_target' : 'bet_total_mismatch';
+            logBetMismatchSnapshot(reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_total');
             console.warn(`[AutoTrigger] 현재 총 베팅 ${formatMoney(betSummary.total)} != 기대 ${formatMoney(expectedTotal)} → 복구`);
             if (markBetStateNeedsRecovery(reason)) runSequence();
             return;
         }
 
         if (isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
+            logBetMismatchSnapshot('bet_amount_not_detected_current', betSummary, expectedPlan, activeSeatNumbers, 'watcher_ready');
             console.warn('[AutoTrigger] betting window open but controlled seats have no valid chips; recovery required');
             if (markBetStateNeedsRecovery('bet_amount_not_detected_current')) runSequence();
             return;

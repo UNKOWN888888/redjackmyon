@@ -286,6 +286,8 @@ const stackSandbox = loadPartial('09-betting-clicks.js', {
   lastSelectedStackChipValue: 0,
   lastSelectedStackChipAt: 0,
   CLICK_DELAY_MS: 0,
+  CHIP_SELECTION_VERIFY_MS: 0,
+  VERIFY_POLL_MS: 1,
   isScriptStopped: () => false,
   closeBetBlockingBottomSheetIfOpen: async () => false,
   findChipByValue: value => value === 7500 ? stackButton : null,
@@ -295,10 +297,71 @@ const stackSandbox = loadPartial('09-betting-clicks.js', {
   detectAvailableChips: () => [{ value: 7500, element: stackButton }],
   robustClick: () => true,
   sleep: async () => {},
+  waitForCondition: async fn => fn(),
   getSelectedChipAmount: () => 0,
+  isStackChipButtonSelected: () => false,
 });
 assert.equal(await stackSandbox.selectChipByValue(7500), true);
 assert.equal(stackSandbox.isSelectedChipSafeForSeatClick(7500, 7500), true);
 assert.equal(stackLogs.some(log => log.message === 'select_chip_ok_stack'), true);
+
+{
+  let walletAmount = 60000;
+  let sentClicks = 0;
+  const seats = new Map([1, 2, 3, 4].map(seatNumber => [seatNumber, { seatNumber }]));
+  const staleSeatAmountSandbox = loadPartial('09-betting-clicks.js', {
+    BET_CLICK_RETRY_LIMIT: 0,
+    BET_NO_EFFECT_RETRY_LIMIT: 0,
+    BET_CLICK_VERIFY_MS: 0,
+    BET_NO_EFFECT_RECHECK_MS: 0,
+    VERIFY_POLL_MS: 1,
+    SEAT_CLICK_DELAY_MS: 0,
+    uniqueSortedSeatNumbers: numbers => [...new Set(numbers)].sort((a, b) => a - b),
+    getSeatByNumber: number => seats.get(number) || null,
+    // 실제 좌석당 15,000원인데 DOM 파서가 지갑 합계 60,000원을 각 좌석 값처럼 반환하는 상황.
+    getSeatBetState: () => ({ amountDetected: true, amount: 60000, hasChip: true, chipCount: 1 }),
+    getSeatDisplayedBetAmount: () => 60000,
+    getWalletTotalBetReading: () => ({ detected: true, ambiguous: false, amount: walletAmount }),
+    getBroadcastSeatTargetState: numbers => ({ targets: numbers, live: numbers, missing: [], extra: [], exact: true }),
+    isVisible: () => true,
+    isDisabledLike: () => false,
+    isScriptStopped: () => false,
+    closeBetBlockingBottomSheetIfOpen: async () => false,
+    getSeatBetClickElement: seat => seat,
+    getSeatBetClickCandidates: seat => [seat],
+    getElementLabel: () => 'seat',
+    getBetClickProbeLabel: () => 'seat',
+    markBetClickDebug: () => {},
+    markBetClickGuard: () => {},
+    pushBetLog: () => {},
+    formatMoney: String,
+    getSelectedChipAmount: () => 7500,
+    getRememberedSelectedStackChipAmount: () => 0,
+    robustBetClick: () => {
+      sentClicks++;
+      walletAmount += 30000;
+      return true;
+    },
+    sleep: async () => {},
+    waitForCondition: async fn => fn(),
+    hasGhostChip: () => false,
+    Date,
+  });
+
+  const options = {
+    expectedBasePerSeatAmount: 15000,
+    expectedWalletBaseAmount: 60000,
+  };
+  assert.equal(await staleSeatAmountSandbox.clickMainBetChipBroadcastVerified(
+    [1, 2, 3, 4], 7500, 1, 22500, options,
+  ), false, 'a stale detected seat amount must remain blocked without an internally verified continuation flag');
+  assert.equal(sentClicks, 0);
+
+  assert.equal(await staleSeatAmountSandbox.clickMainBetChipBroadcastVerified(
+    [1, 2, 3, 4], 7500, 1, 22500, { ...options, allowWalletDerivedSeatBaseline: true },
+  ), true, 'exact 60,000 wallet progress must allow the final 7,500 broadcast step for four verified seats');
+  assert.equal(sentClicks, 1);
+  assert.equal(walletAmount, 90000);
+}
 
 console.log('betting progress regression tests passed');

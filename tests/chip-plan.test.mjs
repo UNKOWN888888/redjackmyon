@@ -74,4 +74,83 @@ const declaredChip = {
 };
 assert.equal(sandbox.getChipStackButtonValue(declaredChip), 7500);
 
+const progressSandbox = loadPartial('02-diagnostics.js', {});
+const multiChipPlan = [
+  { value: 15000, count: 1 },
+  { value: 7500, count: 1 },
+];
+assert.deepEqual(
+  JSON.parse(JSON.stringify(progressSandbox.getRemainingChipPlanFromAppliedPerSeat(multiChipPlan, 15000))),
+  [{ value: 7500, count: 1 }],
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(progressSandbox.getRemainingChipPlanFromAppliedPerSeat(multiChipPlan, 22500))),
+  [],
+);
+assert.equal(progressSandbox.getRemainingChipPlanFromAppliedPerSeat(multiChipPlan, 7500), null);
+
+{
+  let walletAmount = 60000;
+  const resumeSandbox = loadPartial('02-diagnostics.js', {
+    Date,
+    verifiedBetProgress: null,
+    VERIFIED_BET_PROGRESS_TTL_MS: 120000,
+    TARGET_BET_AMOUNT: 90000,
+    SEAT_COUNT: 4,
+    AUTO_SEAT_COUNT: true,
+    getWalletTotalBetReading: () => ({ detected: true, ambiguous: false, amount: walletAmount }),
+    getBroadcastSeatTargetState: numbers => ({ exact: numbers.join(',') === '1,2,3,4' }),
+    getSeatByNumber: seatNumber => ({ seatNumber }),
+    getSeatBetState: () => ({ hasChip: true }),
+    hasGhostChip: () => false,
+  });
+  const plan = {
+    used: 4,
+    perSeatActual: 22500,
+    totalActual: 90000,
+    chipPlan: multiChipPlan,
+  };
+  resumeSandbox.updateVerifiedBetProgress(plan, [1, 2, 3, 4], 15000, { source: 'test' });
+  const resume = resumeSandbox.getResumableVerifiedBetProgress(plan, [1, 2, 3, 4]);
+  assert.equal(resume?.walletAmount, 60000);
+  assert.equal(resume?.nextChip, 7500);
+  assert.deepEqual(JSON.parse(JSON.stringify(resume?.remainingChipPlan)), [{ value: 7500, count: 1 }]);
+  walletAmount = 90000;
+  assert.equal(resumeSandbox.getResumableVerifiedBetProgress(plan, [1, 2, 3, 4]), null, 'resume must stop when the live wallet no longer matches the verified checkpoint');
+}
+
+{
+  const selectedRing = { visible: true };
+  const hiddenRing = { visible: false };
+  const makeButton = (value, ring) => ({
+    textContent: String(value),
+    closest(selector) {
+      return selector === 'button[data-testid^="chip-stack-value-"]' ? this : null;
+    },
+    getAttribute(name) {
+      return name === 'data-testid' ? `chip-stack-value-${value}` : null;
+    },
+    querySelector(selector) {
+      return selector === `[data-testid="chip-stack-value-${value}-ring"]` ? ring : null;
+    },
+  });
+  const buttons = [makeButton(15000, selectedRing), makeButton(7500, hiddenRing)];
+  const selectionSandbox = loadPartial('06-chips.js', {
+    qsaDeep: selector => selector === 'button[data-testid^="chip-stack-value-"]' ? buttons : [],
+    isVisible: element => element?.visible !== false,
+    isDisabledLike: () => false,
+    parseNumber: Number,
+    parseMoneySum: Number,
+    parseStrictChipAmount: Number,
+    cachedMinChipValue: 1,
+    _chipDetectCache: null,
+    _chipDetectCacheAt: 0,
+    CHIP_DETECT_CACHE_MS: 45,
+  });
+  assert.equal(selectionSandbox.getSelectedStackChipAmount(), 15000);
+  selectedRing.visible = false;
+  hiddenRing.visible = true;
+  assert.equal(selectionSandbox.getSelectedStackChipAmount(), 7500);
+}
+
 console.log('chip plan regression tests passed');

@@ -15,6 +15,10 @@ function baseSequenceSandbox(overrides = {}) {
     console,
     Date,
     setInterval: () => 0,
+    setBetRuntimeStage: noop,
+    getBetSettingsKey: () => '3000|2|auto',
+    logBetMismatchSnapshot: noop,
+    getFailReasonLabel: String,
     syncSettingsFromUI: noop,
     isScriptStopped: () => false,
     isRunning: false,
@@ -55,6 +59,7 @@ function baseSequenceSandbox(overrides = {}) {
       }
     },
     AUTOPLAY_START_ROUNDS: 100,
+    THRESHOLD: 100,
     getClickableByMarker: () => startBtn,
     AUTOPLAY_MENU_WAIT_MS: 100,
     AUTOBET_COUNT_VERIFY_MS: 100,

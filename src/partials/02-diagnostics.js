@@ -44,6 +44,59 @@
         return chipPlan.map(c => `${formatMoney(c.value)}×${c.count}`).join(' + ');
     }
 
+    const BET_STAGE_LABELS = Object.freeze({
+        idle: '대기',
+        sequence_start: '실행 판단',
+        setup_start: '베팅 준비',
+        seats_ready: '좌석 확인',
+        plan_ready: '칩 계획 완료',
+        reset_existing: '기존 베팅 정리',
+        resume_partial: '검증 지점부터 재개',
+        select_chip: '칩 선택',
+        place_chip: '좌석에 칩 베팅',
+        chip_step_verified: '칩 단계 검증',
+        bet_ready: '베팅 총액 검증 완료',
+        autoplay_open: '자동베팅 메뉴 열기',
+        autoplay_start: '자동베팅 100회 시작',
+        running: '자동베팅 실행 중',
+        recovery_wait: '복구 대기',
+        blocked: '실행 중단',
+        stopped: '스크립트 정지',
+    });
+
+    const FAIL_REASON_LABELS = Object.freeze({
+        bet_total_mismatch: '좌석 표시 합계와 계획 금액이 다름',
+        bet_total_over_target: '총 베팅금액이 목표를 초과함',
+        bet_total_under_target_after_setup: '칩 베팅 후 총액이 목표보다 적음',
+        bet_total_over_target_after_setup: '칩 베팅 후 총액이 목표를 초과함',
+        bet_amount_unknown_current: '좌석 칩 금액을 판독하지 못함',
+        bet_amount_not_detected_current: '현재 좌석에서 유효한 칩을 확인하지 못함',
+        bet_amount_not_detected_after_setup: '칩 클릭 후 좌석 금액을 확인하지 못함',
+        wallet_total_not_zero_before_setup: '기존 베팅 총액이 0원으로 정리되지 않음',
+        wallet_total_missing_before_autoplay: '자동베팅 전 지갑 총 베팅을 찾지 못함',
+        wallet_total_mismatch_before_autoplay: '자동베팅 전 지갑 총액이 계획과 다름',
+        broadcast_seat_set_mismatch: '브로드캐스트 좌석 집합이 계획과 다름',
+        broadcast_seat_set_mismatch_before_bet: '칩 클릭 직전 좌석 집합이 바뀜',
+        chips_missing: '베팅 칩을 찾지 못함',
+        no_chips_detected: '베팅 칩을 찾지 못함',
+        autoplay_btn_missing: '자동베팅 버튼을 찾지 못함',
+        autoplay_btn_not_ready: '자동베팅 버튼이 아직 활성화되지 않음',
+        autoplay_count_missing_after_start: '100회 클릭 후 횟수를 확인하지 못함',
+        settings_changed_during_bet_setup: '베팅 중 설정값이 변경됨',
+    });
+
+    function getBetRuntimeStageLabel(stage = betRuntimeStage) {
+        return BET_STAGE_LABELS[stage] || String(stage || '대기');
+    }
+
+    function getFailReasonLabel(reason = lastFailReason) {
+        if (!reason) return '';
+        if (FAIL_REASON_LABELS[reason]) return FAIL_REASON_LABELS[reason];
+        if (/^select_chip_\d+$/.test(reason)) return `${formatMoney(parseInt(reason.slice(12), 10))}원 칩 선택 실패`;
+        if (/^broadcast_chip_\d+$/.test(reason)) return `${formatMoney(parseInt(reason.slice(15), 10))}원 칩 베팅 실패`;
+        return String(reason).replace(/_/g, ' ');
+    }
+
     function escapeHtml(value) {
         return String(value ?? '')
             .replace(/&/g, '&amp;')
@@ -81,11 +134,143 @@
         return out;
     }
 
+    function getBetPlanExecutionSignature(plan) {
+        if (!plan) return '';
+        const chips = (plan.chipPlan || [])
+            .map(spec => `${Math.floor(spec?.value || 0)}x${Math.floor(spec?.count || 0)}`)
+            .join('+');
+        return [
+            Math.floor(plan.used || 0),
+            Math.floor(plan.perSeatActual || 0),
+            Math.floor(plan.totalActual || 0),
+            chips,
+        ].join('|');
+    }
+
+    function getRemainingChipPlanFromAppliedPerSeat(chipPlan, appliedPerSeat) {
+        let consumedAmount = Math.floor(appliedPerSeat || 0);
+        if (!Number.isFinite(consumedAmount) || consumedAmount < 0) return null;
+        const remaining = [];
+        for (const spec of chipPlan || []) {
+            const value = Math.floor(spec?.value || 0);
+            const count = Math.floor(spec?.count || 0);
+            if (!Number.isFinite(value) || value <= 0 || count <= 0) continue;
+            const specAmount = value * count;
+            if (consumedAmount >= specAmount) {
+                consumedAmount -= specAmount;
+                continue;
+            }
+            if (consumedAmount % value !== 0) return null;
+            const consumedCount = consumedAmount / value;
+            if (!Number.isInteger(consumedCount) || consumedCount < 0 || consumedCount > count) return null;
+            remaining.push({ ...spec, count: count - consumedCount });
+            consumedAmount = 0;
+        }
+        return consumedAmount === 0 ? remaining.filter(spec => spec.count > 0) : null;
+    }
+
+    function getCurrentBetSettingsKeySafe() {
+        return typeof getBetSettingsKey === 'function' ? getBetSettingsKey() : '';
+    }
+
+    function normalizeProgressSeatNumbers(numbers) {
+        return Array.from(new Set((numbers || [])
+            .map(value => parseInt(value, 10))
+            .filter(value => Number.isFinite(value) && value >= 1 && value <= 7)))
+            .sort((a, b) => a - b);
+    }
+
+    function updateVerifiedBetProgress(plan, seatNumbers, perSeatApplied, data = {}) {
+        const seats = normalizeProgressSeatNumbers(seatNumbers);
+        const amount = Math.floor(perSeatApplied || 0);
+        if (!plan || seats.length <= 0 || !Number.isFinite(amount) || amount < 0) return null;
+        const remainingChipPlan = getRemainingChipPlanFromAppliedPerSeat(plan.chipPlan, amount);
+        if (remainingChipPlan === null) return null;
+        verifiedBetProgress = {
+            settingsKey: getCurrentBetSettingsKeySafe(),
+            planSignature: getBetPlanExecutionSignature(plan),
+            seats,
+            perSeatApplied: amount,
+            walletAmount: amount * seats.length,
+            nextChip: remainingChipPlan[0]?.value || null,
+            remainingChipPlan: remainingChipPlan.map(spec => ({ value: spec.value, count: spec.count })),
+            updatedAt: Date.now(),
+            source: data.source || 'setup',
+        };
+        return verifiedBetProgress;
+    }
+
+    function clearVerifiedBetProgress(reason = '') {
+        if (verifiedBetProgress && reason) {
+            pushBetLog('info', 'verified_progress_cleared', {
+                reason,
+                wallet: formatMoney(verifiedBetProgress.walletAmount),
+                seats: verifiedBetProgress.seats.join(','),
+            });
+        }
+        verifiedBetProgress = null;
+    }
+
+    function getMatchingVerifiedBetProgress(plan, seatNumbers) {
+        const progress = verifiedBetProgress;
+        if (!progress || !plan) return null;
+        const ttl = typeof VERIFIED_BET_PROGRESS_TTL_MS === 'number' ? VERIFIED_BET_PROGRESS_TTL_MS : 120000;
+        if (Date.now() - progress.updatedAt > ttl) return null;
+        if (progress.settingsKey !== getCurrentBetSettingsKeySafe()) return null;
+        if (progress.planSignature !== getBetPlanExecutionSignature(plan)) return null;
+        const seats = normalizeProgressSeatNumbers(seatNumbers);
+        if (seats.join(',') !== progress.seats.join(',')) return null;
+        return progress;
+    }
+
+    function isVerifiedBetProgressComplete(plan, seatNumbers) {
+        const progress = getMatchingVerifiedBetProgress(plan, seatNumbers);
+        return !!progress &&
+            progress.perSeatApplied === plan.perSeatActual &&
+            progress.walletAmount === plan.totalActual;
+    }
+
+    function getResumableVerifiedBetProgress(plan, seatNumbers) {
+        const progress = getMatchingVerifiedBetProgress(plan, seatNumbers);
+        if (!progress || progress.perSeatApplied <= 0 || progress.perSeatApplied >= plan.perSeatActual) return null;
+        const remainingChipPlan = getRemainingChipPlanFromAppliedPerSeat(plan.chipPlan, progress.perSeatApplied);
+        if (!remainingChipPlan || remainingChipPlan.length <= 0) return null;
+        const wallet = typeof getWalletTotalBetReading === 'function' ? getWalletTotalBetReading() : null;
+        if (!wallet?.detected || wallet.ambiguous || wallet.amount !== progress.walletAmount) return null;
+        if (typeof getBroadcastSeatTargetState === 'function' && !getBroadcastSeatTargetState(progress.seats).exact) return null;
+        const seatsReady = progress.seats.every(seatNumber => {
+            const seat = getSeatByNumber(seatNumber);
+            const state = getSeatBetState(seat);
+            return !!seat && state.hasChip && !hasGhostChip(seat);
+        });
+        return seatsReady ? { ...progress, remainingChipPlan } : null;
+    }
+
+    function setBetRuntimeStage(stage, data = {}, level = 'info') {
+        const nextStage = String(stage || 'idle');
+        const normalized = normalizeBetLogData(data) || {};
+        const previousStage = betRuntimeStage;
+        const previousData = formatBetLogValue(betRuntimeStageData);
+        const nextData = formatBetLogValue(normalized);
+        if (previousStage === nextStage && previousData === nextData) return false;
+        betRuntimeStage = nextStage;
+        betRuntimeStageAt = Date.now();
+        betRuntimeStageData = normalized;
+        pushBetLog(level, 'stage_changed', {
+            from: previousStage,
+            to: nextStage,
+            ...normalized,
+        });
+        return true;
+    }
+
     function pushBetLog(level, message, data = null) {
         const normalized = normalizeBetLogData(data);
         const item = {
+            sequence: ++betLogSequence,
             at: Date.now(),
             level: level || 'info',
+            stage: betRuntimeStage,
             message: String(message || ''),
             data: normalized,
         };
@@ -99,18 +284,54 @@
         console[method](`[AutoTrigger][BetLog] ${item.message}${suffix}`);
     }
 
-    function getBetDebugLogHtml(limit = 5) {
-        if (!betDebugLog || betDebugLog.length <= 0) return '';
+    function getBetDebugLogHtml(limit = 8) {
+        if (!betDebugLog || betDebugLog.length <= 0) {
+            return '<div class="at-log-empty">아직 기록된 실행 로그가 없습니다.</div>';
+        }
         const rows = betDebugLog.slice(0, limit).map(item => {
-            const age = Math.max(0, Math.floor((Date.now() - item.at) / 1000));
-            const color = item.level === 'error'
-                ? '#ff9c9c'
-                : (item.level === 'warn' ? '#ffd97a' : '#aee8ff');
+            const stamp = new Date(item.at);
+            const time = `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}:${String(stamp.getSeconds()).padStart(2, '0')}.${String(stamp.getMilliseconds()).padStart(3, '0')}`;
             const dataText = formatBetLogValue(item.data);
-            const data = dataText ? ` <span style="opacity:0.72;">${escapeHtml(dataText)}</span>` : '';
-            return `<div><span style="opacity:0.65;">${age}s</span> <span style="color:${color};">${escapeHtml(item.message)}</span>${data}</div>`;
+            const data = dataText ? `<div class="at-log-data">${escapeHtml(dataText)}</div>` : '';
+            return `<div class="at-log-row at-log-${escapeHtml(item.level)}"><div class="at-log-line"><span class="at-log-dot"></span><span class="at-log-time">#${item.sequence || 0} ${time}</span><span class="at-log-stage">${escapeHtml(getBetRuntimeStageLabel(item.stage))}</span><span class="at-log-message">${escapeHtml(item.message)}</span></div>${data}</div>`;
         }).join('');
-        return `베팅 실패로그:<br><div style="max-height:92px; overflow:hidden; line-height:1.35; font-size:10.5px;">${rows}</div>`;
+        return rows;
+    }
+
+    function logBetMismatchSnapshot(reason, summary, plan, seatNumbers, source = 'watcher') {
+        const safe = (fn, fallback) => {
+            try { return fn(); } catch (_) { return fallback; }
+        };
+        const seats = normalizeProgressSeatNumbers(seatNumbers);
+        const wallet = safe(() => getWalletTotalBetReading(), null);
+        const seatText = (summary?.amounts || []).map(item => {
+            const amount = Number.isFinite(item.amount) ? item.amount : (item.hasChip ? '?' : 0);
+            return `${item.seatNumber}:${amount}${item.hasGhost ? ':ghost' : ''}`;
+        }).join(',');
+        const progress = getMatchingVerifiedBetProgress(plan, seats);
+        const data = {
+            reason,
+            source,
+            stage: betRuntimeStage,
+            seats: seats.join(','),
+            seatAmounts: seatText || 'none',
+            seatTotal: Number.isFinite(summary?.total) ? formatMoney(summary.total) : 'unknown',
+            wallet: Number.isFinite(wallet?.amount) ? formatMoney(wallet.amount) : 'unknown',
+            walletValues: (wallet?.values || []).map(formatMoney).join(','),
+            expectedTotal: Number.isFinite(plan?.totalActual) ? formatMoney(plan.totalActual) : 'unknown',
+            expectedPerSeat: Number.isFinite(plan?.perSeatActual) ? formatMoney(plan.perSeatActual) : 'unknown',
+            verifiedWallet: progress ? formatMoney(progress.walletAmount) : 'none',
+            verifiedPerSeat: progress ? formatMoney(progress.perSeatApplied) : 'none',
+            nextChip: progress?.nextChip ? formatMoney(progress.nextChip) : 'none',
+            selectedChip: safe(() => formatMoney(getEffectiveSelectedChipAmount()), 'unknown'),
+        };
+        const fingerprint = formatBetLogValue(data);
+        const repeatMs = typeof BET_MISMATCH_LOG_REPEAT_MS === 'number' ? BET_MISMATCH_LOG_REPEAT_MS : 2000;
+        if (fingerprint === lastBetMismatchFingerprint && Date.now() - lastBetMismatchLoggedAt < repeatMs) return false;
+        lastBetMismatchFingerprint = fingerprint;
+        lastBetMismatchLoggedAt = Date.now();
+        pushBetLog('warn', 'bet_state_mismatch_snapshot', data);
+        return true;
     }
 
     function getBetDebugExportPayload() {
@@ -154,6 +375,7 @@
                 seatCount: SEAT_COUNT,
             },
             state: {
+                scriptVersion: typeof SCRIPT_VERSION === 'string' ? SCRIPT_VERSION : 'unknown',
                 frameMode: typeof SCRIPT_FRAME_MODE === 'string' ? SCRIPT_FRAME_MODE : 'unknown',
                 gameVersion: typeof SCRIPT_GAME_VERSION === 'string' ? SCRIPT_GAME_VERSION : 'unknown',
                 loadMode: scriptLoad.mode,
@@ -175,6 +397,16 @@
                 betClickGuardRemainingMs: Math.max(0, betClickGuardUntil - Date.now()),
                 lastBetClickDebug,
                 lastBetClickDebugAt,
+                runtimeStage: betRuntimeStage,
+                runtimeStageLabel: getBetRuntimeStageLabel(),
+                runtimeStageAt: new Date(betRuntimeStageAt).toISOString(),
+                runtimeStageAgeMs: Math.max(0, Date.now() - betRuntimeStageAt),
+                runtimeStageData: betRuntimeStageData,
+                verifiedBetProgress: verifiedBetProgress ? {
+                    ...verifiedBetProgress,
+                    updatedAt: new Date(verifiedBetProgress.updatedAt).toISOString(),
+                    ageMs: Math.max(0, Date.now() - verifiedBetProgress.updatedAt),
+                } : null,
             },
             chips: safe(() => detectAvailableChips().map(chip => ({
                 value: chip.value,
@@ -198,9 +430,11 @@
             }, null),
             seats,
             logs: (betDebugLog || []).map(item => ({
+                sequence: item.sequence,
                 at: new Date(item.at).toISOString(),
                 ageMs: Math.max(0, Date.now() - item.at),
                 level: item.level,
+                stage: item.stage,
                 message: item.message,
                 data: item.data,
             })),
@@ -469,6 +703,7 @@
             autoBetArmed = false;
             lastBetSetupAt = 0;
             lastSeatPlan = emptyPlan();
+            clearVerifiedBetProgress('settings_changed');
             rememberTargetSeatNumbers(lastTargetSeatNumbers, { allowShrink: true, refresh: false, reason: 'settings_changed' });
             console.log(`[AutoTrigger] settings synced: amount=${TARGET_BET_AMOUNT}, seats=${SEAT_COUNT}, autoSeat=${AUTO_SEAT_COUNT}`);
         }
@@ -488,6 +723,7 @@
         betSettingsDirty = true;
         lastBetSetupAt = 0;
         lastFailReason = reason;
+        setBetRuntimeStage('recovery_wait', { reason }, 'warn');
         if (Date.now() - lastRecoveryAt < AUTOBET_RECOVERY_COOLDOWN_MS) return false;
         lastRecoveryAt = Date.now();
         console.warn(`[AutoTrigger] ${reason} → 베팅 상태 복구 예약`);
@@ -555,8 +791,10 @@
         forceSitPromptSeatUntil = 0;
         clearSettingsInputPending();
         lastSeatPlan = emptyPlan();
+        clearVerifiedBetProgress(reason || 'state_reset');
         clearRememberedSeatNumbers();
         betSettingsDirty = true;
         lastFailReason = null;
+        setBetRuntimeStage(SCRIPT_ENABLED ? 'idle' : 'stopped', { reason });
         console.log('[AutoTrigger] state reset:', reason);
     }

@@ -14,6 +14,9 @@
         }
         isRunning = true;
         let succeeded = false;
+        setBetRuntimeStage('sequence_start', {
+            settingsKey: getBetSettingsKey(),
+        });
         try {
             const currentRoundNumber = observeAutoplayRoundNumber();
             const controlledSeats = getControlledSeatNumbers();
@@ -31,6 +34,11 @@
                 const recovery = getUnknownBetWalletRecovery(currentBetSummary, expectedPlan);
                 if (!recovery.recoverable) {
                     lastFailReason = 'bet_amount_unknown_current';
+                    logBetMismatchSnapshot(lastFailReason, currentBetSummary, expectedPlan, activeSeatNumbers, 'sequence_unknown');
+                    setBetRuntimeStage('blocked', {
+                        reason: lastFailReason,
+                        label: getFailReasonLabel(lastFailReason),
+                    }, 'warn');
                     console.warn('[AutoTrigger] visible chip exists but amount is unknown; recovery paused to avoid double betting');
                     return;
                 }
@@ -64,6 +72,13 @@
                         planned: formatMoney(expectedPlan.totalActual),
                         seats: getRememberedBetSeatNumbers(expectedPlan.used).join(','),
                     });
+                    logBetMismatchSnapshot(
+                        lastFailReason,
+                        getTargetSeatBetSummary(getRememberedBetSeatNumbers(expectedPlan.used), expectedPlan),
+                        expectedPlan,
+                        getRememberedBetSeatNumbers(expectedPlan.used),
+                        'sequence_after_setup'
+                    );
                     return;
                 }
             } else if (readyForRound && betSettingsDirty && isBetSettingsApplied() && !betMismatch) {
@@ -88,6 +103,10 @@
                 return;
             }
 
+            setBetRuntimeStage('autoplay_open', {
+                wallet: formatMoney(expectedPlan.totalActual),
+                seats: getRememberedBetSeatNumbers(expectedPlan.used).join(','),
+            });
             pushBetLog('info', 'autoplay_button_click', {
                 target: getElementLabel(autoplayBtn),
                 readyForRound,
@@ -110,6 +129,9 @@
                     if (typeof closeAutoplayDialogIfOpen === 'function') closeAutoplayDialogIfOpen();
                     return;
                 }
+                setBetRuntimeStage('autoplay_start', {
+                    rounds: AUTOPLAY_START_ROUNDS,
+                });
                 pushBetLog('info', 'autoplay_start_click', {
                     rounds: AUTOPLAY_START_ROUNDS,
                     target: getElementLabel(startBtn),
@@ -128,6 +150,10 @@
                 }
                 pushBetLog('info', 'autoplay_count_detected', {
                     round: observeAutoplayRoundNumber(),
+                });
+                setBetRuntimeStage('running', {
+                    round: observeAutoplayRoundNumber(),
+                    threshold: THRESHOLD,
                 });
             } else {
                 console.warn(`[AutoTrigger] ${AUTOPLAY_START_ROUNDS} rounds start button not found`);
@@ -152,6 +178,10 @@
             console.error('[AutoTrigger] error:', e);
             lastFailReason = 'exception';
             betSettingsDirty = true;
+            setBetRuntimeStage('blocked', {
+                reason: 'exception',
+                message: e?.message || String(e),
+            }, 'error');
         } finally {
             isRunning = false;
             if (succeeded) {

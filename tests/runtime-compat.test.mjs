@@ -9,10 +9,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const bootSource = fs.readFileSync(path.join(rootDir, 'src', 'partials', '00-boot.js'), 'utf8');
 const userscriptMeta = fs.readFileSync(path.join(rootDir, 'src', 'userscript.meta.js'), 'utf8');
+const uiSource = fs.readFileSync(path.join(rootDir, 'src', 'partials', '18-ui.js'), 'utf8');
 
 assert.match(userscriptMeta, /@match\s+https:\/\/widget\.xma8riyvac\.com\/\*/);
 assert.match(userscriptMeta, /@match\s+https:\/\/api\.honorlink\.org\/\*/);
 assert.match(userscriptMeta, /@match\s+https:\/\/client\.fcxlljmmbqtczjya\.net\/\*/);
+const metadataVersion = userscriptMeta.match(/@version\s+([^\s]+)/)?.[1];
+const runtimeVersion = bootSource.match(/const SCRIPT_VERSION = '([^']+)'/)?.[1];
+assert.equal(runtimeVersion, metadataVersion, 'the visible runtime version must match userscript metadata');
+assert.match(uiSource, /class="at-version">v\$\{escapeHtml\(SCRIPT_VERSION\)\}/);
 
 function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, buildName = '811940-blackjackx-staging', seatGrid = false } = {}) {
   const attributes = new Set(alreadyActive ? ['data-autotrigger-script-active'] : []);
@@ -48,7 +53,7 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, bu
   vm.createContext(context);
   vm.runInContext(
     `(function() {\n${bootSource}\n` +
-      `globalThis.__bootResult = { mode: SCRIPT_FRAME_MODE, version: SCRIPT_GAME_VERSION };\n` +
+      `globalThis.__bootResult = { mode: SCRIPT_FRAME_MODE, version: SCRIPT_GAME_VERSION, scriptVersion: SCRIPT_VERSION };\n` +
       `})();`,
     context,
     { filename: '00-boot.js' },
@@ -60,7 +65,7 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, bu
   const { context, attributes } = runBoot({ gameDocument: true, iframe: true });
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.__bootResult)),
-    { mode: 'iframe', version: '3.2.51' },
+    { mode: 'iframe', version: '3.2.51', scriptVersion: metadataVersion },
   );
   assert.equal(attributes.has('data-autotrigger-script-active'), true);
 }
@@ -233,6 +238,15 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, bu
       { seatNumber: 7, amount: null, hasChip: true, hasGhost: false },
     ],
   }, plan), false, 'a detected per-seat mismatch must override an exact aggregate wallet total');
+  seats.isVerifiedBetProgressComplete = () => true;
+  assert.equal(seats.isBetSummaryWalletConfirmed({
+    ...unknownAmounts,
+    amounts: [
+      { seatNumber: 5, amount: 750, hasChip: true, hasGhost: false },
+      { seatNumber: 7, amount: 750, hasChip: true, hasGhost: false },
+    ],
+  }, plan), true, 'an exact wallet total may override stale seat text only after the script verified every betting step');
+  seats.isVerifiedBetProgressComplete = () => false;
   assert.equal(seats.isBetSummaryWalletConfirmed({
     ...unknownAmounts,
     amounts: [

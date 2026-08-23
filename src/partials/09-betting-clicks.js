@@ -41,9 +41,11 @@
             console.warn(`[AutoTrigger] chip ${chipValue} not found`);
             return false;
         }
+        const selectedBefore = getSelectedChipAmount();
         clearRememberedSelectedStackChip();
         pushBetLog('info', 'select_chip', {
             planned: formatMoney(chipValue),
+            selectedBefore: selectedBefore > 0 ? formatMoney(selectedBefore) : 'unknown',
             target: getElementLabel(chip),
             available: detectAvailableChips().map(c => formatMoney(c.value)).join(','),
         });
@@ -58,7 +60,32 @@
         const stackBtn = chip.closest?.('button[data-testid^="chip-stack-value-"]') ||
             (chip.matches?.('button[data-testid^="chip-stack-value-"]') ? chip : null);
         await sleep(CLICK_DELAY_MS);
-        const selectedAmount = getSelectedChipAmount();
+        let selectedAmount = getSelectedChipAmount();
+        let stackSelectionConfirmed = !!(stackBtn && isStackChipButtonSelected(stackBtn));
+        if (stackBtn && selectedAmount > 0 && selectedAmount !== chipValue) {
+            await waitForCondition(() => {
+                selectedAmount = getSelectedChipAmount();
+                stackSelectionConfirmed = isStackChipButtonSelected(stackBtn);
+                return selectedAmount === chipValue || stackSelectionConfirmed;
+            }, CHIP_SELECTION_VERIFY_MS, VERIFY_POLL_MS);
+            selectedAmount = getSelectedChipAmount();
+            if (stackSelectionConfirmed) selectedAmount = chipValue;
+            if (selectedAmount > 0 && selectedAmount !== chipValue) {
+                pushBetLog('warn', 'select_chip_retry_after_stale_selection', {
+                    planned: formatMoney(chipValue),
+                    selected: formatMoney(selectedAmount),
+                    target: getElementLabel(chip),
+                });
+                robustClick(chip);
+                await waitForCondition(() => {
+                    selectedAmount = getSelectedChipAmount();
+                    stackSelectionConfirmed = isStackChipButtonSelected(stackBtn);
+                    return selectedAmount === chipValue || stackSelectionConfirmed;
+                }, CHIP_SELECTION_VERIFY_MS, VERIFY_POLL_MS);
+                selectedAmount = getSelectedChipAmount();
+                if (stackSelectionConfirmed) selectedAmount = chipValue;
+            }
+        }
         if (Number.isFinite(selectedAmount) && selectedAmount > 0 && selectedAmount !== chipValue) {
             pushBetLog('error', 'select_chip_mismatch', {
                 planned: formatMoney(chipValue),
@@ -73,6 +100,7 @@
             pushBetLog('info', 'select_chip_ok_stack', {
                 planned: formatMoney(chipValue),
                 selected: Number.isFinite(selectedAmount) && selectedAmount > 0 ? formatMoney(selectedAmount) : 'unknown',
+                signal: stackSelectionConfirmed || isStackChipButtonSelected(stackBtn) ? 'selected_ring_or_attribute' : 'dispatch_memory',
             });
             return true;
         }
@@ -283,6 +311,44 @@
             !reading.ambiguous &&
             Number.isFinite(reading.amount) &&
             reading.amount === expectedAmount;
+    }
+
+    function resolveBroadcastSeatBaseline({
+        seat,
+        state,
+        expectedBasePerSeatAmount,
+        walletBaseReading,
+        expectedWalletBaseAmount,
+        seatCount,
+        allowWalletDerivedSeatBaseline,
+    }) {
+        const observedAmount = state.amountDetected ? state.amount : (state.hasChip ? null : 0);
+        if (expectedBasePerSeatAmount === null) {
+            return observedAmount === null
+                ? { ok: false, amount: null, observedAmount, source: 'unknown' }
+                : { ok: true, amount: observedAmount, observedAmount, source: 'seat' };
+        }
+        if (observedAmount === expectedBasePerSeatAmount) {
+            return { ok: true, amount: observedAmount, observedAmount, source: 'seat' };
+        }
+
+        const walletBaselineExact = expectedWalletBaseAmount !== null &&
+            expectedBasePerSeatAmount > 0 &&
+            expectedWalletBaseAmount === expectedBasePerSeatAmount * seatCount &&
+            isWalletReadingExactAmount(walletBaseReading, expectedWalletBaseAmount);
+        const seatHasVerifiedChip = state.hasChip && !hasGhostChip(seat);
+        if (
+            observedAmount === null ||
+            (allowWalletDerivedSeatBaseline && walletBaselineExact && seatHasVerifiedChip)
+        ) {
+            return {
+                ok: true,
+                amount: expectedBasePerSeatAmount,
+                observedAmount,
+                source: observedAmount === null ? 'wallet_unknown' : 'wallet_override',
+            };
+        }
+        return { ok: false, amount: observedAmount, observedAmount, source: 'mismatch' };
     }
 
     function isWalletReadingOverBroadcastCap(reading, maxPerSeatAmount, seatCount) {
@@ -509,11 +575,17 @@
         for (const n of targets) {
             const baseSeat = getSeatByNumber(n);
             const baseState = getSeatBetState(baseSeat);
-            let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
-            if (baseAmount === null && expectedBasePerSeatAmount !== null) {
-                baseAmount = expectedBasePerSeatAmount;
-            }
-            if (baseAmount === null) {
+            const baseline = resolveBroadcastSeatBaseline({
+                seat: baseSeat,
+                state: baseState,
+                expectedBasePerSeatAmount,
+                walletBaseReading,
+                expectedWalletBaseAmount,
+                seatCount: targets.length,
+                allowWalletDerivedSeatBaseline: options.allowWalletDerivedSeatBaseline === true,
+            });
+            const baseAmount = baseline.amount;
+            if (!baseline.ok && baseAmount === null) {
                 pushBetLog('error', 'broadcast_base_unknown', {
                     seat: n,
                     chip: formatMoney(chipValue),
@@ -523,13 +595,22 @@
                 console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip batch chip click`);
                 return false;
             }
-            if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+            if (!baseline.ok) {
                 pushBetLog('error', 'broadcast_seat_baseline_mismatch', {
                     seat: n,
                     expected: formatMoney(expectedBasePerSeatAmount),
                     actual: formatMoney(baseAmount),
+                    wallet: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
                 });
                 return false;
+            }
+            if (baseline.source === 'wallet_override') {
+                pushBetLog('warn', 'broadcast_seat_baseline_wallet_override', {
+                    seat: n,
+                    expected: formatMoney(expectedBasePerSeatAmount),
+                    observed: formatMoney(baseline.observedAmount),
+                    wallet: formatMoney(walletBaseReading.amount),
+                });
             }
             const expectedAmount = baseAmount + chipValue * clickCount;
             if (expectedAmount > maxPerSeatAmount) {
@@ -808,11 +889,17 @@
                 for (const n of targets) {
                     const baseSeat = getSeatByNumber(n);
                     const baseState = getSeatBetState(baseSeat);
-                    let baseAmount = baseState.amountDetected ? baseState.amount : (baseState.hasChip ? null : 0);
-                    if (baseAmount === null && expectedBasePerSeatAmount !== null) {
-                        baseAmount = expectedBasePerSeatAmount;
-                    }
-                    if (baseAmount === null) {
+                    const baseline = resolveBroadcastSeatBaseline({
+                        seat: baseSeat,
+                        state: baseState,
+                        expectedBasePerSeatAmount,
+                        walletBaseReading,
+                        expectedWalletBaseAmount,
+                        seatCount: targets.length,
+                        allowWalletDerivedSeatBaseline: options.allowWalletDerivedSeatBaseline === true,
+                    });
+                    const baseAmount = baseline.amount;
+                    if (!baseline.ok && baseAmount === null) {
                         pushBetLog('error', 'broadcast_single_base_unknown', {
                             seat: n,
                             chip: formatMoney(chipValue),
@@ -821,13 +908,22 @@
                         console.warn(`[AutoTrigger] seat ${n} has chip but amount is unknown; skip extra chip click`);
                         return false;
                     }
-                    if (expectedBasePerSeatAmount !== null && baseAmount !== expectedBasePerSeatAmount) {
+                    if (!baseline.ok) {
                         pushBetLog('error', 'broadcast_single_seat_baseline_mismatch', {
                             seat: n,
                             expected: formatMoney(expectedBasePerSeatAmount),
                             actual: formatMoney(baseAmount),
+                            wallet: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
                         });
                         return false;
+                    }
+                    if (baseline.source === 'wallet_override') {
+                        pushBetLog('warn', 'broadcast_single_seat_baseline_wallet_override', {
+                            seat: n,
+                            expected: formatMoney(expectedBasePerSeatAmount),
+                            observed: formatMoney(baseline.observedAmount),
+                            wallet: formatMoney(walletBaseReading.amount),
+                        });
                     }
                     if (baseAmount + chipValue > maxPerSeatAmount) {
                         pushBetLog('error', 'broadcast_single_hard_cap_before_click', {
@@ -861,6 +957,11 @@
                     target: targetTag,
                     candidates: candidateTags,
                     probe,
+                    basePerSeat: Number.isFinite(expectedBasePerSeatAmount) ? formatMoney(expectedBasePerSeatAmount) : 'dom',
+                    walletBefore: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                    expectedWalletAfter: Number.isFinite(expectedWalletBaseAmount)
+                        ? formatMoney(expectedWalletBaseAmount + chipValue * targets.length)
+                        : 'unknown',
                     cap: formatMoney(maxPerSeatAmount),
                 });
                 if (!isSelectedChipSafeForSeatClick(chipValue, maxPerSeatAmount)) return false;
@@ -903,6 +1004,13 @@
                     1
                 );
                 if (walletApplied === 1) {
+                    pushBetLog('info', 'broadcast_single_wallet_verified', {
+                        chip: formatMoney(chipValue),
+                        before: Number.isFinite(walletBaseReading?.amount) ? formatMoney(walletBaseReading.amount) : 'unknown',
+                        after: formatMoney(walletAfterClick.amount),
+                        delta: formatMoney(chipValue * targets.length),
+                        seats: targets.join(','),
+                    });
                     clicked = true;
                     break;
                 }

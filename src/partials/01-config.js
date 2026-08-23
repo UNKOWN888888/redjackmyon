@@ -62,6 +62,9 @@
     const BET_DEBUG_LOG_LIMIT = 200;
     const SINGLE_CHIP_DOM_PART_LIMIT = 8;
     const SELECTED_STACK_CHIP_TTL_MS = 2500;
+    const CHIP_SELECTION_VERIFY_MS = 160;
+    const VERIFIED_BET_PROGRESS_TTL_MS = 120000;
+    const BET_MISMATCH_LOG_REPEAT_MS = 2000;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
     const AUTOPLAY_MODAL_IDLE_CLOSE_MS = 3000;
     const SETTINGS_INPUT_SETTLE_MS = 300;
@@ -120,6 +123,13 @@
     let betClickGuardUntil = 0;
     let lastBetClickGuardReason = '';
     let betDebugLog = [];
+    let betLogSequence = 0;
+    let betRuntimeStage = 'idle';
+    let betRuntimeStageAt = Date.now();
+    let betRuntimeStageData = {};
+    let verifiedBetProgress = null;
+    let lastBetMismatchFingerprint = '';
+    let lastBetMismatchLoggedAt = 0;
     let autoplayModalVisibleSince = 0;
     let lastAutoplayModalActionAt = 0;
     let lastAutoplayModalIdleCloseAt = 0;

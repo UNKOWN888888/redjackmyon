@@ -23,6 +23,17 @@
         let ok = false;
         let failReason = null;
         const setupSettingsKey = getBetSettingsKey();
+        lastFailReason = null;
+        setBetRuntimeStage('setup_start', {
+            target: formatMoney(TARGET_BET_AMOUNT),
+            maxSeats: getMaxSeatCount(),
+        });
+        pushBetLog('info', 'bet_setup_started', {
+            settingsKey: setupSettingsKey,
+            target: formatMoney(TARGET_BET_AMOUNT),
+            maxSeats: getMaxSeatCount(),
+            autoSeat: AUTO_SEAT_COUNT ? 'Y' : 'N',
+        });
 
         try {
             if (getVisibleDecisionPanelInfo().active) {
@@ -171,6 +182,10 @@
                     reason: 'close_verified_before_plan',
                 });
             }
+            setBetRuntimeStage('seats_ready', {
+                seats: targetSeatNumbers.join(','),
+                count: targetSeatNumbers.length,
+            });
 
             const initialBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
             if (!initialBroadcastSeatState.exact) {
@@ -223,12 +238,23 @@
                 chipPlan: formatChipPlan(plan.chipPlan),
                 available: availableChips.map(c => formatMoney(c.value)).join(','),
             });
+            setBetRuntimeStage('plan_ready', {
+                seats: targetSeatNumbers.join(','),
+                perSeat: formatMoney(plan.perSeatActual),
+                total: formatMoney(plan.totalActual),
+                chips: formatChipPlan(plan.chipPlan),
+            });
 
             const currentBetSummary = getTargetSeatBetSummary(targetSeatNumbers, plan);
-            if (isBetSummaryMatchingPlan(currentBetSummary, plan)) {
+            if (isBetSummaryMatchingPlan(currentBetSummary, plan) || isBetSummaryWalletConfirmed(currentBetSummary, plan)) {
                 const existingWalletVariance = getWalletTotalBetVariance(plan);
                 if (existingWalletVariance.status === 'exact') {
                     rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_existing_exact' });
+                    updateVerifiedBetProgress(plan, targetSeatNumbers, plan.perSeatActual, { source: 'existing_exact' });
+                    setBetRuntimeStage('bet_ready', {
+                        wallet: formatMoney(plan.totalActual),
+                        source: 'existing_exact',
+                    });
                     console.log(`[AutoTrigger] existing bet already matches plan: 총 ${formatMoney(currentBetSummary.total)} / 좌석 ${targetSeatNumbers.join(',')}`);
                     pushBetLog('info', 'existing_bet_matches_plan', {
                         seats: targetSeatNumbers.join(','),
@@ -263,80 +289,102 @@
                 });
             }
 
-            let walletBeforeReset = getWalletTotalBetReading();
-            if (!walletBeforeReset.detected || walletBeforeReset.ambiguous || !Number.isFinite(walletBeforeReset.amount)) {
-                failReason = walletBeforeReset.ambiguous
-                    ? 'wallet_total_ambiguous_before_setup'
-                    : 'wallet_total_missing_before_setup';
-                pushBetLog('error', failReason, {
-                    values: (walletBeforeReset.values || []).map(formatMoney).join(','),
+            const resumableProgress = getResumableVerifiedBetProgress(plan, targetSeatNumbers);
+            let expectedAppliedPerSeat = resumableProgress?.perSeatApplied || 0;
+            let chipPlanToExecute = resumableProgress?.remainingChipPlan || plan.chipPlan;
+
+            if (resumableProgress) {
+                setBetRuntimeStage('resume_partial', {
+                    wallet: formatMoney(resumableProgress.walletAmount),
+                    perSeat: formatMoney(resumableProgress.perSeatApplied),
+                    nextChip: formatMoney(resumableProgress.nextChip),
                 });
-                return false;
-            }
-            let walletHasExistingBet = walletBeforeReset.amount > 0;
+                pushBetLog('warn', 'verified_partial_bet_resumed', {
+                    seats: targetSeatNumbers.join(','),
+                    wallet: formatMoney(resumableProgress.walletAmount),
+                    perSeat: formatMoney(resumableProgress.perSeatApplied),
+                    remaining: formatChipPlan(chipPlanToExecute),
+                });
+            } else {
+                setBetRuntimeStage('reset_existing', {
+                    seats: targetSeatNumbers.join(','),
+                });
+                clearVerifiedBetProgress('new_setup_from_zero');
+                let walletBeforeReset = getWalletTotalBetReading();
+                if (!walletBeforeReset.detected || walletBeforeReset.ambiguous || !Number.isFinite(walletBeforeReset.amount)) {
+                    failReason = walletBeforeReset.ambiguous
+                        ? 'wallet_total_ambiguous_before_setup'
+                        : 'wallet_total_missing_before_setup';
+                    pushBetLog('error', failReason, {
+                        values: (walletBeforeReset.values || []).map(formatMoney).join(','),
+                    });
+                    return false;
+                }
+                let walletHasExistingBet = walletBeforeReset.amount > 0;
 
-            for (const n of targetSeatNumbers) {
-                if (isScriptStopped()) { failReason = 'stopped'; return false; }
-                const seat = getSeatByNumber(n);
-                const existingState = getSeatBetState(seat);
+                for (const n of targetSeatNumbers) {
+                    if (isScriptStopped()) { failReason = 'stopped'; return false; }
+                    const seat = getSeatByNumber(n);
+                    const existingState = getSeatBetState(seat);
 
-                // [1.46] 좌석 close-icon은 "앉음" 신호이고 베팅 close가 아니다.
-                //        기존 베팅 초기화는 mainbet 영역의 bet-spot-close-icon-button만 사용한다.
-                const betCloseBtn = getSeatBetCloseButton(seat);
-                const hasBetCloseBtn = !!(betCloseBtn && isVisible(betCloseBtn));
+                    // 좌석 close-icon은 앉음 신호다. 기존 칩은 mainbet의 베팅 닫기 버튼으로만 지운다.
+                    const betCloseBtn = getSeatBetCloseButton(seat);
+                    const hasBetCloseBtn = !!(betCloseBtn && isVisible(betCloseBtn));
 
-                if (existingState.hasChip && !existingState.amountDetected) {
-                    console.warn(`[AutoTrigger] seat ${n} has visible chip but amount unknown → force close to avoid double betting`);
-                    if (!(await closeSeatBet(n))) {
-                        failReason = `close_seat_${n}_unknown`;
-                        return false;
+                    if (existingState.hasChip && !existingState.amountDetected) {
+                        console.warn(`[AutoTrigger] seat ${n} has visible chip but amount unknown → force close to avoid double betting`);
+                        if (!(await closeSeatBet(n))) {
+                            failReason = `close_seat_${n}_unknown`;
+                            return false;
+                        }
+                        resetExistingBet = true;
+                        if (!(await sitSeatIfNeeded(n))) {
+                            failReason = `resit_seat_${n}_unknown`;
+                            return false;
+                        }
+                        const walletAfterSeatReset = getWalletTotalBetReading();
+                        if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
+                        continue;
                     }
-                    resetExistingBet = true;
-                    if (!(await sitSeatIfNeeded(n))) {
-                        failReason = `resit_seat_${n}_unknown`;
-                        return false;
+
+                    const existing = existingState.amountDetected ? existingState.amount : 0;
+                    if (existing > 0 || (walletHasExistingBet && hasBetCloseBtn)) {
+                        const reasonLog = existing > 0
+                            ? `existing bet ${formatMoney(existing)}`
+                            : 'bet close button visible (chip exists but unrecognized)';
+                        console.log(`[AutoTrigger] seat ${n} ${reasonLog}; reset before applying plan`);
+                        if (!(await closeSeatBet(n))) {
+                            failReason = `close_seat_${n}`;
+                            return false;
+                        }
+                        resetExistingBet = true;
+                        if (!(await sitSeatIfNeeded(n))) {
+                            failReason = `resit_seat_${n}`;
+                            return false;
+                        }
+                        const walletAfterSeatReset = getWalletTotalBetReading();
+                        if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
                     }
-                    const walletAfterSeatReset = getWalletTotalBetReading();
-                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
-                    continue;
                 }
 
-                const existing = existingState.amountDetected ? existingState.amount : 0;
-                if (existing > 0 || (walletHasExistingBet && hasBetCloseBtn)) {
-                    const reasonLog = existing > 0
-                        ? `existing bet ${formatMoney(existing)}`
-                        : 'bet close button visible (chip exists but unrecognized)';
-                    console.log(`[AutoTrigger] seat ${n} ${reasonLog}; reset before applying plan`);
-                    if (!(await closeSeatBet(n))) {
-                        failReason = `close_seat_${n}`;
-                        return false;
-                    }
-                    resetExistingBet = true;
-                    if (!(await sitSeatIfNeeded(n))) {
-                        failReason = `resit_seat_${n}`;
-                        return false;
-                    }
-                    const walletAfterSeatReset = getWalletTotalBetReading();
-                    if (isWalletReadingExactAmount(walletAfterSeatReset, 0)) walletHasExistingBet = false;
+                let walletAfterReset = getWalletTotalBetReading();
+                const walletResetConfirmed = isWalletReadingExactAmount(walletAfterReset, 0) || await waitForCondition(() => {
+                    walletAfterReset = getWalletTotalBetReading();
+                    return isWalletReadingExactAmount(walletAfterReset, 0);
+                }, resetExistingBet ? WALLET_RESET_VERIFY_MS : 120, VERIFY_POLL_MS);
+                if (!walletResetConfirmed) {
+                    failReason = 'wallet_total_not_zero_before_setup';
+                    pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
+                        detected: walletAfterReset.detected ? 'Y' : 'N',
+                        ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
+                        amount: Number.isFinite(walletAfterReset.amount)
+                            ? formatMoney(walletAfterReset.amount)
+                            : 'unknown',
+                    });
+                    console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
+                    return false;
                 }
-            }
-
-            let walletAfterReset = getWalletTotalBetReading();
-            const walletResetConfirmed = isWalletReadingExactAmount(walletAfterReset, 0) || await waitForCondition(() => {
-                walletAfterReset = getWalletTotalBetReading();
-                return isWalletReadingExactAmount(walletAfterReset, 0);
-            }, resetExistingBet ? WALLET_RESET_VERIFY_MS : 120, VERIFY_POLL_MS);
-            if (!walletResetConfirmed) {
-                failReason = 'wallet_total_not_zero_before_setup';
-                pushBetLog('warn', 'wallet_total_not_zero_before_setup', {
-                    detected: walletAfterReset.detected ? 'Y' : 'N',
-                    ambiguous: walletAfterReset.ambiguous ? 'Y' : 'N',
-                    amount: Number.isFinite(walletAfterReset.amount)
-                        ? formatMoney(walletAfterReset.amount)
-                        : 'unknown',
-                });
-                console.warn('[AutoTrigger] 기존 베팅 제거 후 지갑 총액 0원 확인 대기; 새 칩 클릭 보류');
-                return false;
+                updateVerifiedBetProgress(plan, targetSeatNumbers, 0, { source: 'wallet_zero' });
             }
 
             let finalBroadcastSeatState = getBroadcastSeatTargetState(targetSeatNumbers);
@@ -377,13 +425,18 @@
                 });
                 return false;
             }
-            let expectedAppliedPerSeat = 0;
-            for (const spec of plan.chipPlan) {
+            for (const spec of chipPlanToExecute) {
                 if (isScriptStopped()) { failReason = 'stopped'; return false; }
                 if (getBetSettingsKey() !== setupSettingsKey) {
                     failReason = 'settings_changed_during_bet_setup';
                     return false;
                 }
+                setBetRuntimeStage('select_chip', {
+                    chip: formatMoney(spec.value),
+                    count: spec.count,
+                    appliedPerSeat: formatMoney(expectedAppliedPerSeat),
+                    wallet: formatMoney(expectedAppliedPerSeat * targetSeatNumbers.length),
+                });
                 if (!(await selectChipByValue(spec.value))) {
                     failReason = `select_chip_${spec.value}`;
                     pushBetLog('error', 'setup_select_chip_failed', {
@@ -397,6 +450,13 @@
                     failReason = 'settings_changed_during_bet_setup';
                     return false;
                 }
+                setBetRuntimeStage('place_chip', {
+                    chip: formatMoney(spec.value),
+                    count: spec.count,
+                    seats: targetSeatNumbers.join(','),
+                    beforeWallet: formatMoney(expectedAppliedPerSeat * targetSeatNumbers.length),
+                    expectedAfterWallet: formatMoney((expectedAppliedPerSeat + spec.value * spec.count) * targetSeatNumbers.length),
+                });
                 if (!(await clickMainBetChipBroadcastVerified(
                     targetSeatNumbers,
                     spec.value,
@@ -405,6 +465,7 @@
                     {
                         expectedBasePerSeatAmount: expectedAppliedPerSeat,
                         expectedWalletBaseAmount: expectedAppliedPerSeat * targetSeatNumbers.length,
+                        allowWalletDerivedSeatBaseline: expectedAppliedPerSeat > 0,
                     }
                 ))) {
                     failReason = `broadcast_chip_${spec.value}`;
@@ -418,6 +479,13 @@
                     return false;
                 }
                 expectedAppliedPerSeat += spec.value * spec.count;
+                updateVerifiedBetProgress(plan, targetSeatNumbers, expectedAppliedPerSeat, { source: 'chip_step' });
+                setBetRuntimeStage('chip_step_verified', {
+                    chip: formatMoney(spec.value),
+                    perSeat: formatMoney(expectedAppliedPerSeat),
+                    wallet: formatMoney(expectedAppliedPerSeat * targetSeatNumbers.length),
+                    nextChip: verifiedBetProgress?.nextChip ? formatMoney(verifiedBetProgress.nextChip) : '완료',
+                });
             }
 
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });
@@ -436,6 +504,7 @@
                     planned: formatMoney(plan.totalActual),
                     seats: lastTargetSeatNumbers.join(','),
                 });
+                logBetMismatchSnapshot(failReason, finalBetSummary, plan, lastTargetSeatNumbers, 'setup_final');
                 return false;
             }
             if (!areBetSeatsReadyForRoundAction(plan) && !finalWalletConfirmed) {
@@ -462,6 +531,11 @@
                 seats: targetSeatNumbers.join(','),
                 perSeat: formatMoney(plan.perSeatActual),
             });
+            setBetRuntimeStage('bet_ready', {
+                wallet: formatMoney(plan.totalActual),
+                perSeat: formatMoney(plan.perSeatActual),
+                seats: targetSeatNumbers.join(','),
+            });
             ok = true;
             return true;
         } finally {
@@ -477,6 +551,18 @@
             } else {
                 betSettingsDirty = true;
                 lastFailReason = failReason;
+                pushBetLog('error', 'bet_setup_failed', {
+                    reason: failReason || 'unknown',
+                    label: getFailReasonLabel(failReason),
+                    stage: betRuntimeStage,
+                    verifiedWallet: verifiedBetProgress ? formatMoney(verifiedBetProgress.walletAmount) : 'none',
+                    verifiedPerSeat: verifiedBetProgress ? formatMoney(verifiedBetProgress.perSeatApplied) : 'none',
+                    nextChip: verifiedBetProgress?.nextChip ? formatMoney(verifiedBetProgress.nextChip) : 'none',
+                });
+                setBetRuntimeStage('blocked', {
+                    reason: failReason || 'unknown',
+                    label: getFailReasonLabel(failReason),
+                }, 'error');
                 console.warn('[AutoTrigger] setupBetAmount failed:', failReason);
             }
         }
