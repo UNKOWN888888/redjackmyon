@@ -12,7 +12,7 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.93';
+    const SCRIPT_VERSION = '1.94';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';

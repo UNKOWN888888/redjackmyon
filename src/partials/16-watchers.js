@@ -35,6 +35,12 @@
 
         if (handleSupportPopupReloadRecovery(phase)) return;
 
+        if (autoplayStartPendingAt > 0) {
+            const confirmation = observeAutoplayStartConfirmation('watcher');
+            if (confirmation.confirmed || isAutoplayStartConfirmationPending()) return;
+        }
+        if (isAutoplayStartTransitionGuardActive()) return;
+
         if (handleImmediateSeatOpportunities('main', phase)) return;
 
         // [1.39] 자동 베팅 단독 꺼짐 FAST PATH — phase 분기보다 먼저.
@@ -127,6 +133,11 @@
             }
             case Phase.READY: {
                 if (roundNumber === null) {
+                    if (isAutoplayRunning()) {
+                        autoBetArmed = true;
+                        lastRoundCountSeenAt = Date.now();
+                        return;
+                    }
                     // [1.39] fast path는 메인 루프 상단에서 처리됨. 여기까지 온 경우는
                     //        cooldown 안이거나 autoBetArmed=false거나 isBetSettingsApplied=false 상태.
                     //        grace 후 fallback recovery.

@@ -211,10 +211,26 @@
         }
 
         console.log('[AutoTrigger] 자동 베팅 실행 중 → 중지');
-        robustClick(stopBtn);
+        pushBetLog('warn', 'autoplay_stop_click', {
+            target: getElementLabel(stopBtn),
+            reason: lastFailReason || 'bet_reconfiguration',
+        });
+        if (!robustClick(stopBtn)) {
+            pushBetLog('error', 'autoplay_stop_dispatch_failed', {
+                target: getElementLabel(stopBtn),
+            });
+            return false;
+        }
         autoplayStopCount++;
         const stopped = await waitForCondition(() => !isAutoplayRunning(), STOP_AUTOPLAY_WAIT_MS);
-        if (!stopped) { console.warn('[AutoTrigger] 자동 베팅 중지 확인 실패'); return false; }
+        if (!stopped) {
+            pushBetLog('error', 'autoplay_stop_not_confirmed', {
+                waitMs: STOP_AUTOPLAY_WAIT_MS,
+            });
+            console.warn('[AutoTrigger] 자동 베팅 중지 확인 실패');
+            return false;
+        }
+        pushBetLog('info', 'autoplay_stop_confirmed', {});
         await sleep(50);
         return stopped;
     }
@@ -484,7 +500,7 @@
 
         const now = Date.now();
         if (!autoplayModalVisibleSince) autoplayModalVisibleSince = now;
-        if (isRunning || isBetSetupRunning) {
+        if (isRunning || isBetSetupRunning || isAutoplayStartConfirmationPending()) {
             markAutoplayModalAction();
             return false;
         }

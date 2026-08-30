@@ -5,6 +5,8 @@
     async function reArmAutoplayOnly() {
         if (isScriptStopped() || isRunning || isBetSetupRunning) return false;
         if (isAutomationLocked()) return false;
+        if (isAutoplayStartConfirmationPending()) return false;
+        if (isAutoplayStartTransitionGuardActive()) return false;
         if (Date.now() - lastAutoplayRearmAt < AUTOPLAY_REARM_COOLDOWN_MS) return false;
         if (isAutoplayRunning()) return false;
 
@@ -40,6 +42,7 @@
             pushBetLog('info', 'rearm_autoplay_button_click', {
                 target: getElementLabel(autoplayBtn),
             });
+            markAutoplayModalAction();
             robustClick(autoplayBtn);
             await sleep(70);
             if (isScriptStopped()) return false;
@@ -55,6 +58,9 @@
                 console.warn(`[AutoTrigger] re-arm: ${AUTOPLAY_START_ROUNDS} rounds start button not found`);
                 pushBetLog('error', 'rearm_start_button_missing', {
                     selector: startSelector,
+                });
+                markAutoplayOnlyRecovery('start_btn_missing', {
+                    context: 'rearm',
                 });
                 return false;
             }
@@ -72,18 +78,27 @@
                 rounds: AUTOPLAY_START_ROUNDS,
                 target: getElementLabel(startBtn),
             });
-            robustClick(startBtn);
-            autoplayStartCount++;
-            autoplayRearmCount++;
-            console.log(`[AutoTrigger] re-arm: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
-
-            const countDetected = await waitForCondition(() => observeAutoplayRoundNumber() !== null, AUTOBET_COUNT_VERIFY_MS, 30);
-            if (!countDetected) {
-                console.warn('[AutoTrigger] re-arm: round count not detected after click');
-                pushBetLog('error', 'rearm_count_missing_after_start', {
+            if (!robustClick(startBtn)) {
+                pushBetLog('error', 'rearm_start_dispatch_failed', {
                     rounds: AUTOPLAY_START_ROUNDS,
+                    target: getElementLabel(startBtn),
+                });
+                markAutoplayOnlyRecovery('autoplay_start_dispatch_failed', {
+                    context: 'rearm',
                 });
                 return false;
+            }
+            autoplayStartCount++;
+            autoplayRearmCount++;
+            beginAutoplayStartConfirmation('rearm', {
+                rounds: AUTOPLAY_START_ROUNDS,
+            });
+            console.log(`[AutoTrigger] re-arm: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
+
+            const confirmation = await waitForAutoplayStartConfirmation('rearm');
+            if (!confirmation.confirmed) {
+                succeeded = true;
+                return true;
             }
 
             await sleep(40);
@@ -128,6 +143,8 @@
     async function restartAutoplayForThreshold(currentRoundNumber) {
         if (isScriptStopped() || isRunning || isBetSetupRunning) return false;
         if (isAutomationLocked()) return false;
+        if (isAutoplayStartConfirmationPending()) return false;
+        if (isAutoplayStartTransitionGuardActive()) return false;
         if (!shouldRestartAutoplayForThreshold(currentRoundNumber)) return false;
 
         isRunning = true;
@@ -165,6 +182,7 @@
                 threshold: THRESHOLD,
                 target: getElementLabel(autoplayBtn),
             });
+            markAutoplayModalAction();
             robustClick(autoplayBtn);
             await sleep(70);
             if (isScriptStopped()) return false;
@@ -183,6 +201,9 @@
                 pushBetLog('error', 'threshold_start_button_missing', {
                     selector: startSelector,
                 });
+                markAutoplayOnlyRecovery('start_btn_missing', {
+                    context: 'threshold',
+                });
                 return false;
             }
 
@@ -195,19 +216,29 @@
                 rounds: AUTOPLAY_START_ROUNDS,
                 target: getElementLabel(startBtn),
             });
-            robustClick(startBtn);
+            if (!robustClick(startBtn)) {
+                pushBetLog('error', 'threshold_start_dispatch_failed', {
+                    rounds: AUTOPLAY_START_ROUNDS,
+                    target: getElementLabel(startBtn),
+                });
+                markAutoplayOnlyRecovery('autoplay_start_dispatch_failed', {
+                    context: 'threshold',
+                });
+                return false;
+            }
             autoplayStartCount++;
             autoplayThresholdRestartCount++;
             autoBetArmed = true;
+            beginAutoplayStartConfirmation('threshold', {
+                rounds: AUTOPLAY_START_ROUNDS,
+            });
             console.log(`[AutoTrigger] 기준미만 재시작: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
 
-            const countDetected = await waitForCondition(() => observeAutoplayRoundNumber() !== null, AUTOBET_COUNT_VERIFY_MS, 30);
-            if (!countDetected) {
-                pushBetLog('error', 'threshold_count_missing_after_start', {
-                    rounds: AUTOPLAY_START_ROUNDS,
-                });
-                markBetStateNeedsRecovery('autoplay_count_missing_after_start');
-                return false;
+            const confirmation = await waitForAutoplayStartConfirmation('threshold');
+            if (!confirmation.confirmed) {
+                succeeded = true;
+                betSettingsDirty = false;
+                return true;
             }
 
             await sleep(40);

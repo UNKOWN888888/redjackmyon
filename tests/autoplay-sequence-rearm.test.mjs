@@ -20,6 +20,8 @@ function baseSequenceSandbox(overrides = {}) {
     logBetMismatchSnapshot: noop,
     getFailReasonLabel: String,
     syncSettingsFromUI: noop,
+    isAutoplayStartConfirmationPending: () => false,
+    isAutoplayStartTransitionGuardActive: () => false,
     isScriptStopped: () => false,
     isRunning: false,
     isAutomationLocked: () => false,
@@ -57,7 +59,16 @@ function baseSequenceSandbox(overrides = {}) {
         startClickCount++;
         roundDetected = true;
       }
+      return true;
     },
+    markAutoplayModalAction: noop,
+    beginAutoplayStartConfirmation: noop,
+    waitForAutoplayStartConfirmation: async () => ({
+      confirmed: roundDetected,
+      round: roundDetected ? 100 : null,
+      signal: roundDetected ? 'round_counter' : 'none',
+    }),
+    markAutoplayOnlyRecovery: noop,
     AUTOPLAY_START_ROUNDS: 100,
     THRESHOLD: 100,
     getClickableByMarker: () => startBtn,
@@ -193,6 +204,33 @@ async function testUnknownAmountUnderTargetTriggersBetRecovery() {
   assert.equal(setupCalled, true, 'wallet-confirmed underbet must be reset instead of waiting forever');
 }
 
+async function testRunSequenceDefersDelayedAutoplayConfirmationWithoutResettingBet() {
+  let betRecoveryCount = 0;
+  let confirmationStarted = 0;
+  const env = baseSequenceSandbox({
+    beginAutoplayStartConfirmation: () => {
+      confirmationStarted++;
+    },
+    waitForAutoplayStartConfirmation: async () => ({
+      confirmed: false,
+      pending: true,
+      round: null,
+      signal: 'none',
+    }),
+    markBetStateNeedsRecovery: () => {
+      betRecoveryCount++;
+    },
+  });
+
+  await env.sandbox.runSequence();
+
+  assert.equal(env.startClickCount, 1);
+  assert.equal(confirmationStarted, 1);
+  assert.equal(betRecoveryCount, 0, 'a delayed autoplay counter must not dirty or rebuild an exact bet');
+  assert.equal(env.sandbox.betSettingsDirty, false);
+  assert.ok(env.sandbox.lastTriggerAt > 0, 'a dispatched start click should enter guarded confirmation state');
+}
+
 function baseRearmSandbox(overrides = {}) {
   let clickCount = 0;
   const autoplayBtn = { kind: 'autoplay' };
@@ -206,6 +244,8 @@ function baseRearmSandbox(overrides = {}) {
     isRunning: false,
     isBetSetupRunning: false,
     isAutomationLocked: () => false,
+    isAutoplayStartConfirmationPending: () => false,
+    isAutoplayStartTransitionGuardActive: () => false,
     lastAutoplayRearmAt: 0,
     AUTOPLAY_REARM_COOLDOWN_MS: 100,
     isAutoplayRunning: () => roundDetected,
@@ -222,7 +262,16 @@ function baseRearmSandbox(overrides = {}) {
     robustClick: el => {
       clickCount++;
       if (el === startBtn) roundDetected = true;
+      return true;
     },
+    markAutoplayModalAction: noop,
+    beginAutoplayStartConfirmation: noop,
+    waitForAutoplayStartConfirmation: async () => ({
+      confirmed: roundDetected,
+      round: roundDetected ? 100 : null,
+      signal: roundDetected ? 'round_counter' : 'none',
+    }),
+    markAutoplayOnlyRecovery: noop,
     sleep: async () => {},
     waitForCondition: async fn => !!fn(),
     getClickableByMarker: () => startBtn,
@@ -279,6 +328,27 @@ async function testRearmRechecksSafetyImmediatelyBeforeStartClick() {
   assert.equal(dialogClosed, true, 're-arm should close the autoplay menu when the second safety check fails');
 }
 
+async function testRearmTreatsDelayedConfirmationAsPendingSuccess() {
+  let confirmationStarted = 0;
+  const env = baseRearmSandbox({
+    beginAutoplayStartConfirmation: () => {
+      confirmationStarted++;
+    },
+    waitForAutoplayStartConfirmation: async () => ({
+      confirmed: false,
+      pending: true,
+      round: null,
+      signal: 'none',
+    }),
+  });
+
+  const result = await env.sandbox.reArmAutoplayOnly();
+
+  assert.equal(result, true);
+  assert.equal(confirmationStarted, 1);
+  assert.equal(env.sandbox.betSettingsDirty, false);
+}
+
 function testRunningThresholdTopUpIgnoresRoundBetVariance() {
   let walletSafetyReads = 0;
   const modifyButton = { kind: 'modify' };
@@ -310,8 +380,10 @@ await testRunSequenceRecomputesPlanAfterSetup();
 await testRunSequenceBlocksAutoplayWhenSetupDoesNotProduceReadyBet();
 await testRunSequenceRechecksSafetyImmediatelyBeforeStartClick();
 await testUnknownAmountUnderTargetTriggersBetRecovery();
+await testRunSequenceDefersDelayedAutoplayConfirmationWithoutResettingBet();
 await testRearmBlocksDirtyBetSettings();
 await testRearmRechecksSafetyImmediatelyBeforeStartClick();
+await testRearmTreatsDelayedConfirmationAsPendingSuccess();
 testRunningThresholdTopUpIgnoresRoundBetVariance();
 
 console.log('autoplay sequence/rearm regression tests passed');

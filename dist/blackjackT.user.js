@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.93
+// @version      1.94
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 다중 칩 전환과 검증된 부분 베팅 재개를 지원하고, 좌석 집합·지갑 총액·클릭 단계를 세밀하게 기록합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -34,7 +34,7 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.93';
+    const SCRIPT_VERSION = '1.94';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';
@@ -110,7 +110,9 @@
     const INSURANCE_WATCH_INTERVAL_MS = 40;
     const INSURANCE_CLICK_VERIFY_MS = 90;
     const INSURANCE_CLICK_MAX_ATTEMPTS = 2;
-    const AUTOBET_COUNT_VERIFY_MS = 650;
+    const AUTOBET_COUNT_VERIFY_MS = 1400;
+    const AUTOPLAY_START_PENDING_GRACE_MS = 3200;
+    const AUTOPLAY_POST_START_STABILIZE_MS = 900;
     const AUTOBET_COUNT_MISSING_GRACE_MS = 420;
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
     const AUTOPLAY_BUTTON_READY_WAIT_MS = 800;
@@ -237,6 +239,10 @@
     let autoplayModalVisibleSince = 0;
     let lastAutoplayModalActionAt = 0;
     let lastAutoplayModalIdleCloseAt = 0;
+    let autoplayStartPendingAt = 0;
+    let autoplayStartPendingUntil = 0;
+    let autoplayStartPendingContext = '';
+    let autoplayStartTransitionGuardUntil = 0;
     let sitPromptTriggerCount = 0;
     const SIT_PROMPT_COOLDOWN_MS = 180;
     const SIT_PROMPT_FORCE_SEAT_MS = 1200;
@@ -308,6 +314,8 @@
         bet_ready: '베팅 총액 검증 완료',
         autoplay_open: '자동베팅 메뉴 열기',
         autoplay_start: '자동베팅 100회 시작',
+        autoplay_confirm_wait: '자동베팅 시작 확인 대기',
+        autoplay_rearm_wait: '자동베팅 재시도 대기',
         running: '자동베팅 실행 중',
         recovery_wait: '복구 대기',
         blocked: '실행 중단',
@@ -697,6 +705,11 @@
                 roundNumber: safe(() => getRoundNumber(), null),
                 autoplayButtonReady: safe(() => isAutoplayButtonReady(), false),
                 autoplayRunning: safe(() => isAutoplayRunning(), false),
+                autoplayStartPending: safe(() => isAutoplayStartConfirmationPending(), false),
+                autoplayStartPendingAt: autoplayStartPendingAt > 0 ? new Date(autoplayStartPendingAt).toISOString() : null,
+                autoplayStartPendingRemainingMs: Math.max(0, autoplayStartPendingUntil - exportNow),
+                autoplayStartPendingContext,
+                autoplayStartTransitionGuardRemainingMs: Math.max(0, autoplayStartTransitionGuardUntil - exportNow),
                 betClickGuardActive: safe(() => isBetClickGuardActive(), false),
                 betClickGuardReason: lastBetClickGuardReason,
                 betClickGuardRemainingMs: Math.max(0, betClickGuardUntil - Date.now()),
@@ -1118,6 +1131,7 @@
 
         const changed = getBetSettingsKey() !== prevKey;
         if (changed) {
+            clearAutoplayStartConfirmation('settings_changed');
             betSettingsDirty = true;
             autoBetArmed = false;
             lastBetSetupAt = 0;
@@ -1137,7 +1151,136 @@
         return value;
     }
 
+    function clearAutoplayStartConfirmation(reason = '') {
+        const previous = {
+            pendingAt: autoplayStartPendingAt,
+            pendingUntil: autoplayStartPendingUntil,
+            context: autoplayStartPendingContext,
+        };
+        autoplayStartPendingAt = 0;
+        autoplayStartPendingUntil = 0;
+        autoplayStartPendingContext = '';
+        autoplayStartTransitionGuardUntil = 0;
+        return { ...previous, reason };
+    }
+
+    function beginAutoplayStartConfirmation(context, data = {}) {
+        const now = Date.now();
+        autoplayStartPendingAt = now;
+        autoplayStartPendingUntil = now + AUTOPLAY_START_PENDING_GRACE_MS;
+        autoplayStartPendingContext = context || 'autoplay_start';
+        autoBetArmed = true;
+        lastRoundCountSeenAt = now;
+        lastFailReason = null;
+        if (typeof markAutoplayModalAction === 'function') markAutoplayModalAction();
+        setBetRuntimeStage('autoplay_confirm_wait', {
+            context: autoplayStartPendingContext,
+            graceMs: AUTOPLAY_START_PENDING_GRACE_MS,
+            ...data,
+        });
+        pushBetLog('info', 'autoplay_start_confirmation_started', {
+            context: autoplayStartPendingContext,
+            graceMs: AUTOPLAY_START_PENDING_GRACE_MS,
+            ...data,
+        });
+    }
+
+    function isAutoplayStartConfirmationPending() {
+        if (autoplayStartPendingUntil <= 0) return false;
+        const now = Date.now();
+        if (now < autoplayStartPendingUntil) return true;
+
+        const expired = clearAutoplayStartConfirmation('expired');
+        autoplayStartTransitionGuardUntil = now + AUTOPLAY_POST_START_STABILIZE_MS;
+        pushBetLog('warn', 'autoplay_start_confirmation_expired', {
+            context: expired.context || 'unknown',
+            waitedMs: expired.pendingAt > 0 ? now - expired.pendingAt : 0,
+        });
+        setBetRuntimeStage('autoplay_rearm_wait', {
+            reason: 'autoplay_start_confirmation_expired',
+            context: expired.context || 'unknown',
+        }, 'warn');
+        return false;
+    }
+
+    function observeAutoplayStartConfirmation(context = 'poll') {
+        const round = observeAutoplayRoundNumber();
+        const stopButton = typeof getAutoplayStopButton === 'function' ? getAutoplayStopButton() : null;
+        const signal = round !== null ? 'round_counter' : (stopButton ? 'stop_button' : 'none');
+        if (signal === 'none') {
+            return {
+                confirmed: false,
+                pending: isAutoplayStartConfirmationPending(),
+                round: null,
+                signal,
+            };
+        }
+
+        const confirmedAt = Date.now();
+        const pending = clearAutoplayStartConfirmation('confirmed');
+        autoplayStartTransitionGuardUntil = confirmedAt + AUTOPLAY_POST_START_STABILIZE_MS;
+        autoBetArmed = true;
+        lastRoundCountSeenAt = confirmedAt;
+        if (pending.pendingAt > 0) {
+            lastFailReason = null;
+            pushBetLog('info', 'autoplay_start_confirmed', {
+                context: pending.context || context,
+                observedBy: context,
+                signal,
+                round: round !== null ? round : 'not_visible',
+                elapsedMs: confirmedAt - pending.pendingAt,
+            });
+            setBetRuntimeStage('running', {
+                round: round !== null ? round : '확인 중',
+                signal,
+                threshold: THRESHOLD,
+            });
+        }
+        return { confirmed: true, pending: false, round, signal };
+    }
+
+    function isAutoplayStartTransitionGuardActive() {
+        if (autoplayStartTransitionGuardUntil <= 0) return false;
+        if (Date.now() < autoplayStartTransitionGuardUntil) return true;
+        autoplayStartTransitionGuardUntil = 0;
+        return false;
+    }
+
+    async function waitForAutoplayStartConfirmation(context) {
+        let confirmation = observeAutoplayStartConfirmation(context);
+        const confirmed = confirmation.confirmed || await waitForCondition(() => {
+            confirmation = observeAutoplayStartConfirmation(context);
+            return confirmation.confirmed;
+        }, AUTOBET_COUNT_VERIFY_MS, 30);
+        if (confirmed) return confirmation;
+
+        const now = Date.now();
+        pushBetLog('warn', 'autoplay_start_confirmation_deferred', {
+            context,
+            verifyMs: AUTOBET_COUNT_VERIFY_MS,
+            remainingGraceMs: Math.max(0, autoplayStartPendingUntil - now),
+            round: confirmation.round ?? 'not_visible',
+            stopButton: confirmation.signal === 'stop_button' ? 'Y' : 'N',
+        });
+        setBetRuntimeStage('autoplay_confirm_wait', {
+            context,
+            remainingGraceMs: Math.max(0, autoplayStartPendingUntil - now),
+        }, 'warn');
+        return confirmation;
+    }
+
+    function markAutoplayOnlyRecovery(reason, data = {}) {
+        clearAutoplayStartConfirmation('autoplay_only_recovery');
+        autoBetArmed = true;
+        lastRoundCountSeenAt = Date.now();
+        lastFailReason = reason;
+        setBetRuntimeStage('autoplay_rearm_wait', { reason, ...data }, 'warn');
+        pushBetLog('warn', 'autoplay_only_recovery_scheduled', { reason, ...data });
+        return true;
+    }
+
     function markBetStateNeedsRecovery(reason) {
+        clearAutoplayStartConfirmation('bet_state_recovery');
         autoBetArmed = false;
         betSettingsDirty = true;
         lastBetSetupAt = 0;
@@ -1188,6 +1331,7 @@
     }
 
     function resetTransientState(reason) {
+        clearAutoplayStartConfirmation(reason || 'state_reset');
         isRunning = false;
         lastTriggerAt = 0;
         lastBetSetupAt = 0;
@@ -1796,10 +1940,26 @@
         }
 
         console.log('[AutoTrigger] 자동 베팅 실행 중 → 중지');
-        robustClick(stopBtn);
+        pushBetLog('warn', 'autoplay_stop_click', {
+            target: getElementLabel(stopBtn),
+            reason: lastFailReason || 'bet_reconfiguration',
+        });
+        if (!robustClick(stopBtn)) {
+            pushBetLog('error', 'autoplay_stop_dispatch_failed', {
+                target: getElementLabel(stopBtn),
+            });
+            return false;
+        }
         autoplayStopCount++;
         const stopped = await waitForCondition(() => !isAutoplayRunning(), STOP_AUTOPLAY_WAIT_MS);
-        if (!stopped) { console.warn('[AutoTrigger] 자동 베팅 중지 확인 실패'); return false; }
+        if (!stopped) {
+            pushBetLog('error', 'autoplay_stop_not_confirmed', {
+                waitMs: STOP_AUTOPLAY_WAIT_MS,
+            });
+            console.warn('[AutoTrigger] 자동 베팅 중지 확인 실패');
+            return false;
+        }
+        pushBetLog('info', 'autoplay_stop_confirmed', {});
         await sleep(50);
         return stopped;
     }
@@ -2069,7 +2229,7 @@
 
         const now = Date.now();
         if (!autoplayModalVisibleSince) autoplayModalVisibleSince = now;
-        if (isRunning || isBetSetupRunning) {
+        if (isRunning || isBetSetupRunning || isAutoplayStartConfirmationPending()) {
             markAutoplayModalAction();
             return false;
         }
@@ -2885,10 +3045,11 @@
         if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
         const verifiedProgressComplete = typeof isVerifiedBetProgressComplete === 'function' &&
             isVerifiedBetProgressComplete(plan, summary.seats);
+        if (verifiedProgressComplete) return true;
         return summary.amounts.every(item =>
             item.hasChip &&
             !item.hasGhost &&
-            (verifiedProgressComplete || !Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
+            (!Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
         );
     }
 
@@ -3050,6 +3211,8 @@
     function handleImmediateSeatOpportunities(source = 'loop', phaseHint = null) {
         if (isScriptStopped() || isRunning || isBetSetupRunning || isAutomationLocked()) return false;
         if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
+        if (typeof isAutoplayStartConfirmationPending === 'function' && isAutoplayStartConfirmationPending()) return false;
+        if (typeof isAutoplayStartTransitionGuardActive === 'function' && isAutoplayStartTransitionGuardActive()) return false;
 
         const now = Date.now();
         const fastPromptOnly = source === 'fast';
@@ -5620,6 +5783,14 @@
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });
             const finalBetSummary = getTargetSeatBetSummary(lastTargetSeatNumbers, plan);
             const finalWalletConfirmed = isBetSummaryWalletConfirmed(finalBetSummary, plan);
+            if (finalBetSummary.total !== plan.totalActual && finalWalletConfirmed) {
+                pushBetLog('info', 'final_total_dom_lag_wallet_verified', {
+                    domTotal: formatMoney(finalBetSummary.total),
+                    wallet: formatMoney(plan.totalActual),
+                    verifiedPerSeat: formatMoney(plan.perSeatActual),
+                    seats: lastTargetSeatNumbers.join(','),
+                });
+            }
             if (finalBetSummary.total !== plan.totalActual && !finalWalletConfirmed) {
                 failReason = finalBetSummary.total > plan.totalActual
                     ? 'bet_total_over_target_after_setup'
@@ -5976,6 +6147,8 @@
     async function reArmAutoplayOnly() {
         if (isScriptStopped() || isRunning || isBetSetupRunning) return false;
         if (isAutomationLocked()) return false;
+        if (isAutoplayStartConfirmationPending()) return false;
+        if (isAutoplayStartTransitionGuardActive()) return false;
         if (Date.now() - lastAutoplayRearmAt < AUTOPLAY_REARM_COOLDOWN_MS) return false;
         if (isAutoplayRunning()) return false;
 
@@ -6011,6 +6184,7 @@
             pushBetLog('info', 'rearm_autoplay_button_click', {
                 target: getElementLabel(autoplayBtn),
             });
+            markAutoplayModalAction();
             robustClick(autoplayBtn);
             await sleep(70);
             if (isScriptStopped()) return false;
@@ -6026,6 +6200,9 @@
                 console.warn(`[AutoTrigger] re-arm: ${AUTOPLAY_START_ROUNDS} rounds start button not found`);
                 pushBetLog('error', 'rearm_start_button_missing', {
                     selector: startSelector,
+                });
+                markAutoplayOnlyRecovery('start_btn_missing', {
+                    context: 'rearm',
                 });
                 return false;
             }
@@ -6043,18 +6220,27 @@
                 rounds: AUTOPLAY_START_ROUNDS,
                 target: getElementLabel(startBtn),
             });
-            robustClick(startBtn);
-            autoplayStartCount++;
-            autoplayRearmCount++;
-            console.log(`[AutoTrigger] re-arm: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
-
-            const countDetected = await waitForCondition(() => observeAutoplayRoundNumber() !== null, AUTOBET_COUNT_VERIFY_MS, 30);
-            if (!countDetected) {
-                console.warn('[AutoTrigger] re-arm: round count not detected after click');
-                pushBetLog('error', 'rearm_count_missing_after_start', {
+            if (!robustClick(startBtn)) {
+                pushBetLog('error', 'rearm_start_dispatch_failed', {
                     rounds: AUTOPLAY_START_ROUNDS,
+                    target: getElementLabel(startBtn),
+                });
+                markAutoplayOnlyRecovery('autoplay_start_dispatch_failed', {
+                    context: 'rearm',
                 });
                 return false;
+            }
+            autoplayStartCount++;
+            autoplayRearmCount++;
+            beginAutoplayStartConfirmation('rearm', {
+                rounds: AUTOPLAY_START_ROUNDS,
+            });
+            console.log(`[AutoTrigger] re-arm: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
+
+            const confirmation = await waitForAutoplayStartConfirmation('rearm');
+            if (!confirmation.confirmed) {
+                succeeded = true;
+                return true;
             }
 
             await sleep(40);
@@ -6099,6 +6285,8 @@
     async function restartAutoplayForThreshold(currentRoundNumber) {
         if (isScriptStopped() || isRunning || isBetSetupRunning) return false;
         if (isAutomationLocked()) return false;
+        if (isAutoplayStartConfirmationPending()) return false;
+        if (isAutoplayStartTransitionGuardActive()) return false;
         if (!shouldRestartAutoplayForThreshold(currentRoundNumber)) return false;
 
         isRunning = true;
@@ -6136,6 +6324,7 @@
                 threshold: THRESHOLD,
                 target: getElementLabel(autoplayBtn),
             });
+            markAutoplayModalAction();
             robustClick(autoplayBtn);
             await sleep(70);
             if (isScriptStopped()) return false;
@@ -6154,6 +6343,9 @@
                 pushBetLog('error', 'threshold_start_button_missing', {
                     selector: startSelector,
                 });
+                markAutoplayOnlyRecovery('start_btn_missing', {
+                    context: 'threshold',
+                });
                 return false;
             }
 
@@ -6166,19 +6358,29 @@
                 rounds: AUTOPLAY_START_ROUNDS,
                 target: getElementLabel(startBtn),
             });
-            robustClick(startBtn);
+            if (!robustClick(startBtn)) {
+                pushBetLog('error', 'threshold_start_dispatch_failed', {
+                    rounds: AUTOPLAY_START_ROUNDS,
+                    target: getElementLabel(startBtn),
+                });
+                markAutoplayOnlyRecovery('autoplay_start_dispatch_failed', {
+                    context: 'threshold',
+                });
+                return false;
+            }
             autoplayStartCount++;
             autoplayThresholdRestartCount++;
             autoBetArmed = true;
+            beginAutoplayStartConfirmation('threshold', {
+                rounds: AUTOPLAY_START_ROUNDS,
+            });
             console.log(`[AutoTrigger] 기준미만 재시작: autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
 
-            const countDetected = await waitForCondition(() => observeAutoplayRoundNumber() !== null, AUTOBET_COUNT_VERIFY_MS, 30);
-            if (!countDetected) {
-                pushBetLog('error', 'threshold_count_missing_after_start', {
-                    rounds: AUTOPLAY_START_ROUNDS,
-                });
-                markBetStateNeedsRecovery('autoplay_count_missing_after_start');
-                return false;
+            const confirmation = await waitForAutoplayStartConfirmation('threshold');
+            if (!confirmation.confirmed) {
+                succeeded = true;
+                betSettingsDirty = false;
+                return true;
             }
 
             await sleep(40);
@@ -6202,6 +6404,8 @@
     async function runSequence() {
         if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return;
         syncSettingsFromUI();
+        if (typeof isAutoplayStartConfirmationPending === 'function' && isAutoplayStartConfirmationPending()) return;
+        if (typeof isAutoplayStartTransitionGuardActive === 'function' && isAutoplayStartTransitionGuardActive()) return;
         if (isScriptStopped() || isRunning) return;
         if (isAutomationLocked()) {
             lastFailReason = 'read_only_safety_mode';
@@ -6312,6 +6516,7 @@
                 readyForRound,
                 applied: isBetSettingsApplied() ? 'Y' : 'N',
             });
+            markAutoplayModalAction();
             robustClick(autoplayBtn);
             await sleep(55);
             if (isScriptStopped()) return;
@@ -6336,23 +6541,33 @@
                     rounds: AUTOPLAY_START_ROUNDS,
                     target: getElementLabel(startBtn),
                 });
-                robustClick(startBtn);
+                if (!robustClick(startBtn)) {
+                    pushBetLog('error', 'autoplay_start_dispatch_failed', {
+                        rounds: AUTOPLAY_START_ROUNDS,
+                        target: getElementLabel(startBtn),
+                    });
+                    markAutoplayOnlyRecovery('autoplay_start_dispatch_failed', {
+                        context: 'sequence',
+                    });
+                    return;
+                }
                 autoplayStartCount++;
                 clicked = true;
+                beginAutoplayStartConfirmation('sequence', {
+                    rounds: AUTOPLAY_START_ROUNDS,
+                });
                 console.log(`[AutoTrigger] autoplay ${AUTOPLAY_START_ROUNDS} rounds clicked`);
-                const countDetected = await waitForCondition(() => observeAutoplayRoundNumber() !== null, AUTOBET_COUNT_VERIFY_MS, 30);
-                if (!countDetected) {
-                    pushBetLog('error', 'autoplay_count_missing_after_start', {
-                        rounds: AUTOPLAY_START_ROUNDS,
-                    });
-                    markBetStateNeedsRecovery('autoplay_count_missing_after_start');
+                const confirmation = await waitForAutoplayStartConfirmation('sequence');
+                if (!confirmation.confirmed) {
+                    succeeded = true;
                     return;
                 }
                 pushBetLog('info', 'autoplay_count_detected', {
-                    round: observeAutoplayRoundNumber(),
+                    round: confirmation.round !== null ? confirmation.round : 'not_visible',
+                    signal: confirmation.signal,
                 });
                 setBetRuntimeStage('running', {
-                    round: observeAutoplayRoundNumber(),
+                    round: confirmation.round !== null ? confirmation.round : '확인 중',
                     threshold: THRESHOLD,
                 });
             } else {
@@ -6360,7 +6575,9 @@
                 pushBetLog('error', 'autoplay_start_button_missing', {
                     selector: startSelector,
                 });
-                markBetStateNeedsRecovery('start_btn_missing');
+                markAutoplayOnlyRecovery('start_btn_missing', {
+                    context: 'sequence',
+                });
                 return;
             }
 
@@ -6435,6 +6652,12 @@
         }
 
         if (handleSupportPopupReloadRecovery(phase)) return;
+
+        if (autoplayStartPendingAt > 0) {
+            const confirmation = observeAutoplayStartConfirmation('watcher');
+            if (confirmation.confirmed || isAutoplayStartConfirmationPending()) return;
+        }
+        if (isAutoplayStartTransitionGuardActive()) return;
 
         if (handleImmediateSeatOpportunities('main', phase)) return;
 
@@ -6528,6 +6751,11 @@
             }
             case Phase.READY: {
                 if (roundNumber === null) {
+                    if (isAutoplayRunning()) {
+                        autoBetArmed = true;
+                        lastRoundCountSeenAt = Date.now();
+                        return;
+                    }
                     // [1.39] fast path는 메인 루프 상단에서 처리됨. 여기까지 온 경우는
                     //        cooldown 안이거나 autoBetArmed=false거나 isBetSettingsApplied=false 상태.
                     //        grace 후 fallback recovery.

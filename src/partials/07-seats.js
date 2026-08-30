@@ -415,10 +415,11 @@
         if (getWalletTotalBetVariance(plan).status !== 'exact') return false;
         const verifiedProgressComplete = typeof isVerifiedBetProgressComplete === 'function' &&
             isVerifiedBetProgressComplete(plan, summary.seats);
+        if (verifiedProgressComplete) return true;
         return summary.amounts.every(item =>
             item.hasChip &&
             !item.hasGhost &&
-            (verifiedProgressComplete || !Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
+            (!Number.isFinite(item.amount) || item.amount === plan.perSeatActual)
         );
     }
 
@@ -580,6 +581,8 @@
     function handleImmediateSeatOpportunities(source = 'loop', phaseHint = null) {
         if (isScriptStopped() || isRunning || isBetSetupRunning || isAutomationLocked()) return false;
         if (typeof isSettingsInputPending === 'function' && isSettingsInputPending()) return false;
+        if (typeof isAutoplayStartConfirmationPending === 'function' && isAutoplayStartConfirmationPending()) return false;
+        if (typeof isAutoplayStartTransitionGuardActive === 'function' && isAutoplayStartTransitionGuardActive()) return false;
 
         const now = Date.now();
         const fastPromptOnly = source === 'fast';

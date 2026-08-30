@@ -491,6 +491,14 @@
             rememberTargetSeatNumbers(targetSeatNumbers, { allowShrink: true, reason: 'setup_final' });
             const finalBetSummary = getTargetSeatBetSummary(lastTargetSeatNumbers, plan);
             const finalWalletConfirmed = isBetSummaryWalletConfirmed(finalBetSummary, plan);
+            if (finalBetSummary.total !== plan.totalActual && finalWalletConfirmed) {
+                pushBetLog('info', 'final_total_dom_lag_wallet_verified', {
+                    domTotal: formatMoney(finalBetSummary.total),
+                    wallet: formatMoney(plan.totalActual),
+                    verifiedPerSeat: formatMoney(plan.perSeatActual),
+                    seats: lastTargetSeatNumbers.join(','),
+                });
+            }
             if (finalBetSummary.total !== plan.totalActual && !finalWalletConfirmed) {
                 failReason = finalBetSummary.total > plan.totalActual
                     ? 'bet_total_over_target_after_setup'

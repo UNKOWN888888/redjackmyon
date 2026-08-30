@@ -36,7 +36,9 @@
     const INSURANCE_WATCH_INTERVAL_MS = 40;
     const INSURANCE_CLICK_VERIFY_MS = 90;
     const INSURANCE_CLICK_MAX_ATTEMPTS = 2;
-    const AUTOBET_COUNT_VERIFY_MS = 650;
+    const AUTOBET_COUNT_VERIFY_MS = 1400;
+    const AUTOPLAY_START_PENDING_GRACE_MS = 3200;
+    const AUTOPLAY_POST_START_STABILIZE_MS = 900;
     const AUTOBET_COUNT_MISSING_GRACE_MS = 420;
     const AUTOBET_RECOVERY_COOLDOWN_MS = 800;
     const AUTOPLAY_BUTTON_READY_WAIT_MS = 800;
@@ -163,6 +165,10 @@
     let autoplayModalVisibleSince = 0;
     let lastAutoplayModalActionAt = 0;
     let lastAutoplayModalIdleCloseAt = 0;
+    let autoplayStartPendingAt = 0;
+    let autoplayStartPendingUntil = 0;
+    let autoplayStartPendingContext = '';
+    let autoplayStartTransitionGuardUntil = 0;
     let sitPromptTriggerCount = 0;
     const SIT_PROMPT_COOLDOWN_MS = 180;
     const SIT_PROMPT_FORCE_SEAT_MS = 1200;

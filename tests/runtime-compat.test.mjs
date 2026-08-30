@@ -242,6 +242,13 @@ function runBoot({ gameDocument = true, iframe = true, alreadyActive = false, bu
   assert.equal(seats.isBetSummaryWalletConfirmed({
     ...unknownAmounts,
     amounts: [
+      { seatNumber: 5, amount: null, hasChip: true, hasGhost: true },
+      { seatNumber: 7, amount: null, hasChip: true, hasGhost: true },
+    ],
+  }, plan), true, 'exact wallet plus complete click progress must tolerate transient ghost seat DOM after broadcast betting');
+  assert.equal(seats.isBetSummaryWalletConfirmed({
+    ...unknownAmounts,
+    amounts: [
       { seatNumber: 5, amount: 750, hasChip: true, hasGhost: false },
       { seatNumber: 7, amount: 750, hasChip: true, hasGhost: false },
     ],
