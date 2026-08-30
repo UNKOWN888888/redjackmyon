@@ -71,6 +71,7 @@
     const CHIP_SELECTION_SETTLE_MS = 120;
     const VERIFIED_BET_PROGRESS_TTL_MS = 120000;
     const BET_MISMATCH_LOG_REPEAT_MS = 2000;
+    const BET_SETUP_UI_WAIT_LOG_REPEAT_MS = 3000;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
     const AUTOPLAY_MODAL_IDLE_CLOSE_MS = 3000;
     const SETTINGS_INPUT_SETTLE_MS = 300;
@@ -169,6 +170,9 @@
     let autoplayStartPendingUntil = 0;
     let autoplayStartPendingContext = '';
     let autoplayStartTransitionGuardUntil = 0;
+    let betSetupUiWaitSince = 0;
+    let lastBetSetupUiWaitLogAt = 0;
+    let betSetupUiWaitStatus = '';
     let sitPromptTriggerCount = 0;
     const SIT_PROMPT_COOLDOWN_MS = 180;
     const SIT_PROMPT_FORCE_SEAT_MS = 1200;

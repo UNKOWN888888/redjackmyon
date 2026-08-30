@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.94
+// @version      1.95
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 다중 칩 전환과 검증된 부분 베팅 재개를 지원하고, 좌석 집합·지갑 총액·클릭 단계를 세밀하게 기록합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
@@ -34,7 +34,7 @@
 
     if (!isBlackjackGameDocument(document)) return;
 
-    const SCRIPT_VERSION = '1.94';
+    const SCRIPT_VERSION = '1.95';
     const SCRIPT_FRAME_MODE = window.top === window.self ? 'top' : 'iframe';
     const SCRIPT_GAME_VERSION = document.querySelector('#root')?.getAttribute?.('data-game-version') || 'unknown';
     const SCRIPT_ACTIVE_ATTRIBUTE = 'data-autotrigger-script-active';
@@ -145,6 +145,7 @@
     const CHIP_SELECTION_SETTLE_MS = 120;
     const VERIFIED_BET_PROGRESS_TTL_MS = 120000;
     const BET_MISMATCH_LOG_REPEAT_MS = 2000;
+    const BET_SETUP_UI_WAIT_LOG_REPEAT_MS = 3000;
     const BET_BLOCKING_MODAL_CLOSE_WAIT_MS = 180;
     const AUTOPLAY_MODAL_IDLE_CLOSE_MS = 3000;
     const SETTINGS_INPUT_SETTLE_MS = 300;
@@ -243,6 +244,9 @@
     let autoplayStartPendingUntil = 0;
     let autoplayStartPendingContext = '';
     let autoplayStartTransitionGuardUntil = 0;
+    let betSetupUiWaitSince = 0;
+    let lastBetSetupUiWaitLogAt = 0;
+    let betSetupUiWaitStatus = '';
     let sitPromptTriggerCount = 0;
     const SIT_PROMPT_COOLDOWN_MS = 180;
     const SIT_PROMPT_FORCE_SEAT_MS = 1200;
@@ -316,6 +320,7 @@
         autoplay_start: '자동베팅 100회 시작',
         autoplay_confirm_wait: '자동베팅 시작 확인 대기',
         autoplay_rearm_wait: '자동베팅 재시도 대기',
+        bet_ui_wait: '베팅 UI 준비 대기',
         running: '자동베팅 실행 중',
         recovery_wait: '복구 대기',
         blocked: '실행 중단',
@@ -331,6 +336,8 @@
         bet_amount_not_detected_current: '현재 좌석에서 유효한 칩을 확인하지 못함',
         bet_amount_not_detected_after_setup: '칩 클릭 후 좌석 금액을 확인하지 못함',
         wallet_total_not_zero_before_setup: '기존 베팅 총액이 0원으로 정리되지 않음',
+        wallet_total_missing_before_setup: '베팅 준비 중 지갑 총액 표시를 찾지 못함',
+        wallet_total_ambiguous_before_setup: '베팅 준비 중 지갑 총액 표시가 일치하지 않음',
         wallet_total_missing_before_autoplay: '자동베팅 전 지갑 총 베팅을 찾지 못함',
         wallet_total_mismatch_before_autoplay: '자동베팅 전 지갑 총액이 계획과 다름',
         broadcast_seat_set_mismatch: '브로드캐스트 좌석 집합이 계획과 다름',
@@ -710,6 +717,10 @@
                 autoplayStartPendingRemainingMs: Math.max(0, autoplayStartPendingUntil - exportNow),
                 autoplayStartPendingContext,
                 autoplayStartTransitionGuardRemainingMs: Math.max(0, autoplayStartTransitionGuardUntil - exportNow),
+                betSetupUiWaiting: betSetupUiWaitSince > 0,
+                betSetupUiWaitStatus,
+                betSetupUiWaitSince: betSetupUiWaitSince > 0 ? new Date(betSetupUiWaitSince).toISOString() : null,
+                betSetupUiWaitAgeMs: betSetupUiWaitSince > 0 ? Math.max(0, exportNow - betSetupUiWaitSince) : 0,
                 betClickGuardActive: safe(() => isBetClickGuardActive(), false),
                 betClickGuardReason: lastBetClickGuardReason,
                 betClickGuardRemainingMs: Math.max(0, betClickGuardUntil - Date.now()),
@@ -1332,6 +1343,9 @@
 
     function resetTransientState(reason) {
         clearAutoplayStartConfirmation(reason || 'state_reset');
+        betSetupUiWaitSince = 0;
+        lastBetSetupUiWaitLogAt = 0;
+        betSetupUiWaitStatus = '';
         isRunning = false;
         lastTriggerAt = 0;
         lastBetSetupAt = 0;
@@ -1999,6 +2013,84 @@
             values,
             candidates,
         };
+    }
+
+    function getBetSetupWalletGate(reading = getWalletTotalBetReading()) {
+        if (!reading?.detected) {
+            return {
+                ready: false,
+                status: 'missing',
+                reason: 'wallet_total_missing_before_setup',
+                reading,
+            };
+        }
+        if (reading.ambiguous || !Number.isFinite(reading.amount)) {
+            return {
+                ready: false,
+                status: 'ambiguous',
+                reason: 'wallet_total_ambiguous_before_setup',
+                reading,
+            };
+        }
+        return { ready: true, status: 'ready', reason: null, reading };
+    }
+
+    function clearBetSetupUiWait(reason = 'wallet_ready', reading = null) {
+        if (betSetupUiWaitSince > 0) {
+            pushBetLog('info', 'bet_setup_ui_resumed', {
+                reason,
+                waitedMs: Date.now() - betSetupUiWaitSince,
+                wallet: Number.isFinite(reading?.amount) ? formatMoney(reading.amount) : 'unknown',
+            });
+        }
+        betSetupUiWaitSince = 0;
+        lastBetSetupUiWaitLogAt = 0;
+        betSetupUiWaitStatus = '';
+    }
+
+    function ensureBetSetupWalletReady(context = 'bet_setup', data = {}, reading = getWalletTotalBetReading()) {
+        const gate = getBetSetupWalletGate(reading);
+        if (gate.ready) {
+            clearBetSetupUiWait('wallet_ready', gate.reading);
+            return true;
+        }
+
+        const now = Date.now();
+        let waitStarted = false;
+        if (betSetupUiWaitSince <= 0 || betSetupUiWaitStatus !== gate.status) {
+            betSetupUiWaitSince = now;
+            lastBetSetupUiWaitLogAt = 0;
+            betSetupUiWaitStatus = gate.status;
+            waitStarted = true;
+        }
+
+        const transientReasons = new Set([
+            'bet_total_mismatch',
+            'bet_amount_not_detected_current',
+            'wallet_total_missing_before_setup',
+            'wallet_total_ambiguous_before_setup',
+            'wallet_total_missing_before_autoplay',
+        ]);
+        if (!lastFailReason || transientReasons.has(lastFailReason)) lastFailReason = null;
+
+        const stageData = {
+            status: gate.status,
+            context,
+            phase: data.phase || lastDiagnosedPhase || 'unknown',
+            seats: data.seats || '',
+        };
+        setBetRuntimeStage('bet_ui_wait', stageData, 'warn');
+
+        if (waitStarted || now - lastBetSetupUiWaitLogAt >= BET_SETUP_UI_WAIT_LOG_REPEAT_MS) {
+            lastBetSetupUiWaitLogAt = now;
+            pushBetLog('warn', 'bet_setup_ui_wait', {
+                ...stageData,
+                reason: gate.reason,
+                waitedMs: now - betSetupUiWaitSince,
+                values: (gate.reading?.values || []).map(formatMoney).join(','),
+            });
+        }
+        return false;
     }
 
     function getExpectedWalletTotalBetAmount(expectedPlan = getExpectedBetPlan()) {
@@ -5310,6 +5402,10 @@
             return false;
         }
         if (!force && Date.now() - lastBetSetupAt < BET_SETUP_COOLDOWN_MS) return false;
+        if (!ensureBetSetupWalletReady('setup_entry', {
+            phase: lastDiagnosedPhase || 'unknown',
+            seats: getControlledSeatNumbers().join(','),
+        })) return false;
 
         isBetSetupRunning = true;
         let ok = false;
@@ -6430,6 +6526,10 @@
             const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
             const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
             let expectedPlan = getExpectedBetPlan();
+            if (!ensureBetSetupWalletReady('sequence', {
+                phase: lastDiagnosedPhase || 'unknown',
+                seats: activeSeatNumbers.join(','),
+            })) return;
             let readyForRound = areBetSeatsReadyForRoundAction(expectedPlan);
             const currentBetSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
             const walletConfirmed = isBetSummaryWalletConfirmed(currentBetSummary, expectedPlan);
@@ -6661,12 +6761,43 @@
 
         if (handleImmediateSeatOpportunities('main', phase)) return;
 
+        const roundNumber = observeAutoplayRoundNumber();
+        const controlledSeats = getControlledSeatNumbers();
+        if (controlledSeats.length > 0) {
+            rememberTargetSeatNumbers(controlledSeats.slice(0, getPlannedSeatLimit()), { reason: 'controlled_detected' });
+        }
+        const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
+        const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
+        const walletReading = getWalletTotalBetReading();
+        const walletGate = getBetSetupWalletGate(walletReading);
+        const autoplayRunningNow = isAutoplayRunning();
+        const autoplayStateVisible = autoplayRunningNow || roundNumber !== null;
+        if (phase !== Phase.NO_TABLE && !walletGate.ready && !autoplayStateVisible) {
+            ensureBetSetupWalletReady('watcher', {
+                phase,
+                seats: activeSeatNumbers.join(','),
+            }, walletReading);
+            return;
+        }
+        if (walletGate.ready) {
+            ensureBetSetupWalletReady('watcher', {
+                phase,
+                seats: activeSeatNumbers.join(','),
+            }, walletReading);
+        } else if (autoplayStateVisible && betSetupUiWaitSince > 0) {
+            clearBetSetupUiWait('autoplay_state_visible', walletReading);
+            setBetRuntimeStage('running', {
+                round: roundNumber !== null ? roundNumber : '확인 중',
+                threshold: THRESHOLD,
+            });
+        }
+
         // [1.39] 자동 베팅 단독 꺼짐 FAST PATH — phase 분기보다 먼저.
         //        한 번이라도 자동베팅이 시작된 적 있고(autoBetArmed), 라운드 카운트가 사라졌고,
         //        베팅 설정이 적용 상태이며, 자동베팅 버튼이 클릭 가능하면 cooldown 검사 후 즉시 재활성화.
         //        실패/cooldown 안인 경우는 그대로 fallthrough → 기존 흐름이 처리.
         if (
-            !isAutoplayRunning() &&
+            !autoplayRunningNow &&
             getRoundNumber() === null &&
             isBetSettingsApplied() &&
             autoBetArmed &&
@@ -6678,17 +6809,10 @@
             return;
         }
 
-        const roundNumber = observeAutoplayRoundNumber();
-        const controlledSeats = getControlledSeatNumbers();
-        if (controlledSeats.length > 0) {
-            rememberTargetSeatNumbers(controlledSeats.slice(0, getPlannedSeatLimit()), { reason: 'controlled_detected' });
-        }
-        const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
-        const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
         const expectedPlan = getExpectedBetPlan();
         const betSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
         const walletConfirmed = isBetSummaryWalletConfirmed(betSummary, expectedPlan);
-        if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
+        if (walletGate.ready && isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
             const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
             if (recovery.recoverable) {
                 logBetMismatchSnapshot(recovery.reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_unknown');
@@ -6707,7 +6831,7 @@
             }, 'warn');
             return;
         }
-        if (isTargetBetTotalMismatch(activeSeatNumbers, expectedPlan)) {
+        if (walletGate.ready && isTargetBetTotalMismatch(activeSeatNumbers, expectedPlan)) {
             const expectedTotal = expectedPlan.totalActual;
             const reason = betSummary.total > expectedTotal ? 'bet_total_over_target' : 'bet_total_mismatch';
             logBetMismatchSnapshot(reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_total');
@@ -6716,7 +6840,7 @@
             return;
         }
 
-        if (isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
+        if (walletGate.ready && isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
             logBetMismatchSnapshot('bet_amount_not_detected_current', betSummary, expectedPlan, activeSeatNumbers, 'watcher_ready');
             console.warn('[AutoTrigger] betting window open but controlled seats have no valid chips; recovery required');
             if (markBetStateNeedsRecovery('bet_amount_not_detected_current')) runSequence();

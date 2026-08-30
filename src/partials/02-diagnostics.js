@@ -60,6 +60,7 @@
         autoplay_start: '자동베팅 100회 시작',
         autoplay_confirm_wait: '자동베팅 시작 확인 대기',
         autoplay_rearm_wait: '자동베팅 재시도 대기',
+        bet_ui_wait: '베팅 UI 준비 대기',
         running: '자동베팅 실행 중',
         recovery_wait: '복구 대기',
         blocked: '실행 중단',
@@ -75,6 +76,8 @@
         bet_amount_not_detected_current: '현재 좌석에서 유효한 칩을 확인하지 못함',
         bet_amount_not_detected_after_setup: '칩 클릭 후 좌석 금액을 확인하지 못함',
         wallet_total_not_zero_before_setup: '기존 베팅 총액이 0원으로 정리되지 않음',
+        wallet_total_missing_before_setup: '베팅 준비 중 지갑 총액 표시를 찾지 못함',
+        wallet_total_ambiguous_before_setup: '베팅 준비 중 지갑 총액 표시가 일치하지 않음',
         wallet_total_missing_before_autoplay: '자동베팅 전 지갑 총 베팅을 찾지 못함',
         wallet_total_mismatch_before_autoplay: '자동베팅 전 지갑 총액이 계획과 다름',
         broadcast_seat_set_mismatch: '브로드캐스트 좌석 집합이 계획과 다름',
@@ -454,6 +457,10 @@
                 autoplayStartPendingRemainingMs: Math.max(0, autoplayStartPendingUntil - exportNow),
                 autoplayStartPendingContext,
                 autoplayStartTransitionGuardRemainingMs: Math.max(0, autoplayStartTransitionGuardUntil - exportNow),
+                betSetupUiWaiting: betSetupUiWaitSince > 0,
+                betSetupUiWaitStatus,
+                betSetupUiWaitSince: betSetupUiWaitSince > 0 ? new Date(betSetupUiWaitSince).toISOString() : null,
+                betSetupUiWaitAgeMs: betSetupUiWaitSince > 0 ? Math.max(0, exportNow - betSetupUiWaitSince) : 0,
                 betClickGuardActive: safe(() => isBetClickGuardActive(), false),
                 betClickGuardReason: lastBetClickGuardReason,
                 betClickGuardRemainingMs: Math.max(0, betClickGuardUntil - Date.now()),
@@ -1076,6 +1083,9 @@
 
     function resetTransientState(reason) {
         clearAutoplayStartConfirmation(reason || 'state_reset');
+        betSetupUiWaitSince = 0;
+        lastBetSetupUiWaitLogAt = 0;
+        betSetupUiWaitStatus = '';
         isRunning = false;
         lastTriggerAt = 0;
         lastBetSetupAt = 0;

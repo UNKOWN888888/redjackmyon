@@ -43,12 +43,43 @@
 
         if (handleImmediateSeatOpportunities('main', phase)) return;
 
+        const roundNumber = observeAutoplayRoundNumber();
+        const controlledSeats = getControlledSeatNumbers();
+        if (controlledSeats.length > 0) {
+            rememberTargetSeatNumbers(controlledSeats.slice(0, getPlannedSeatLimit()), { reason: 'controlled_detected' });
+        }
+        const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
+        const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
+        const walletReading = getWalletTotalBetReading();
+        const walletGate = getBetSetupWalletGate(walletReading);
+        const autoplayRunningNow = isAutoplayRunning();
+        const autoplayStateVisible = autoplayRunningNow || roundNumber !== null;
+        if (phase !== Phase.NO_TABLE && !walletGate.ready && !autoplayStateVisible) {
+            ensureBetSetupWalletReady('watcher', {
+                phase,
+                seats: activeSeatNumbers.join(','),
+            }, walletReading);
+            return;
+        }
+        if (walletGate.ready) {
+            ensureBetSetupWalletReady('watcher', {
+                phase,
+                seats: activeSeatNumbers.join(','),
+            }, walletReading);
+        } else if (autoplayStateVisible && betSetupUiWaitSince > 0) {
+            clearBetSetupUiWait('autoplay_state_visible', walletReading);
+            setBetRuntimeStage('running', {
+                round: roundNumber !== null ? roundNumber : '확인 중',
+                threshold: THRESHOLD,
+            });
+        }
+
         // [1.39] 자동 베팅 단독 꺼짐 FAST PATH — phase 분기보다 먼저.
         //        한 번이라도 자동베팅이 시작된 적 있고(autoBetArmed), 라운드 카운트가 사라졌고,
         //        베팅 설정이 적용 상태이며, 자동베팅 버튼이 클릭 가능하면 cooldown 검사 후 즉시 재활성화.
         //        실패/cooldown 안인 경우는 그대로 fallthrough → 기존 흐름이 처리.
         if (
-            !isAutoplayRunning() &&
+            !autoplayRunningNow &&
             getRoundNumber() === null &&
             isBetSettingsApplied() &&
             autoBetArmed &&
@@ -60,17 +91,10 @@
             return;
         }
 
-        const roundNumber = observeAutoplayRoundNumber();
-        const controlledSeats = getControlledSeatNumbers();
-        if (controlledSeats.length > 0) {
-            rememberTargetSeatNumbers(controlledSeats.slice(0, getPlannedSeatLimit()), { reason: 'controlled_detected' });
-        }
-        const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
-        const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
         const expectedPlan = getExpectedBetPlan();
         const betSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
         const walletConfirmed = isBetSummaryWalletConfirmed(betSummary, expectedPlan);
-        if (isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
+        if (walletGate.ready && isBettingWindowOpen() && betSummary.ambiguousCount > 0 && !walletConfirmed) {
             const recovery = getUnknownBetWalletRecovery(betSummary, expectedPlan);
             if (recovery.recoverable) {
                 logBetMismatchSnapshot(recovery.reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_unknown');
@@ -89,7 +113,7 @@
             }, 'warn');
             return;
         }
-        if (isTargetBetTotalMismatch(activeSeatNumbers, expectedPlan)) {
+        if (walletGate.ready && isTargetBetTotalMismatch(activeSeatNumbers, expectedPlan)) {
             const expectedTotal = expectedPlan.totalActual;
             const reason = betSummary.total > expectedTotal ? 'bet_total_over_target' : 'bet_total_mismatch';
             logBetMismatchSnapshot(reason, betSummary, expectedPlan, activeSeatNumbers, 'watcher_total');
@@ -98,7 +122,7 @@
             return;
         }
 
-        if (isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
+        if (walletGate.ready && isBetSettingsApplied() && activeSeatNumbers.length > 0 && isBettingWindowOpen() && !walletConfirmed && !areBetSeatsReadyForRoundAction(expectedPlan)) {
             logBetMismatchSnapshot('bet_amount_not_detected_current', betSummary, expectedPlan, activeSeatNumbers, 'watcher_ready');
             console.warn('[AutoTrigger] betting window open but controlled seats have no valid chips; recovery required');
             if (markBetStateNeedsRecovery('bet_amount_not_detected_current')) runSequence();

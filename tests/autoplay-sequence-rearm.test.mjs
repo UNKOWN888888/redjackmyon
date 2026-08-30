@@ -34,6 +34,8 @@ function baseSequenceSandbox(overrides = {}) {
     getPlannedSeatLimit: () => 7,
     getRememberedBetSeatNumbers: () => [],
     getExpectedBetPlan: () => ({ totalActual: 3000 }),
+    ensureBetSetupWalletReady: () => true,
+    lastDiagnosedPhase: 'READY',
     areBetSeatsReadyForRoundAction: () => true,
     getTargetSeatBetSummary: () => ({ ambiguousCount: 0 }),
     isBetSummaryWalletConfirmed: () => false,
@@ -202,6 +204,31 @@ async function testUnknownAmountUnderTargetTriggersBetRecovery() {
 
   assert.equal(recoveryReason, 'bet_amount_unknown_under_target');
   assert.equal(setupCalled, true, 'wallet-confirmed underbet must be reset instead of waiting forever');
+}
+
+async function testRunSequenceWaitsForWalletUiWithoutRecoveryLoop() {
+  let recoveryCalls = 0;
+  let setupCalls = 0;
+  const env = baseSequenceSandbox({
+    getControlledSeatNumbers: () => [1, 5, 6, 7],
+    getRememberedBetSeatNumbers: () => [1, 5, 6, 7],
+    ensureBetSetupWalletReady: () => false,
+    markBetStateNeedsRecovery: () => {
+      recoveryCalls++;
+      return true;
+    },
+    setupBetAmount: async () => {
+      setupCalls++;
+      return false;
+    },
+  });
+
+  await env.sandbox.runSequence();
+
+  assert.equal(recoveryCalls, 0);
+  assert.equal(setupCalls, 0);
+  assert.equal(env.autoplayClickCount, 0);
+  assert.equal(env.startClickCount, 0);
 }
 
 async function testRunSequenceDefersDelayedAutoplayConfirmationWithoutResettingBet() {
@@ -380,6 +407,7 @@ await testRunSequenceRecomputesPlanAfterSetup();
 await testRunSequenceBlocksAutoplayWhenSetupDoesNotProduceReadyBet();
 await testRunSequenceRechecksSafetyImmediatelyBeforeStartClick();
 await testUnknownAmountUnderTargetTriggersBetRecovery();
+await testRunSequenceWaitsForWalletUiWithoutRecoveryLoop();
 await testRunSequenceDefersDelayedAutoplayConfirmationWithoutResettingBet();
 await testRearmBlocksDirtyBetSettings();
 await testRearmRechecksSafetyImmediatelyBeforeStartClick();

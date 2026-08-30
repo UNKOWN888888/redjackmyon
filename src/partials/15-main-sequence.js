@@ -28,6 +28,10 @@
             const trackedSeatNumbers = getRememberedBetSeatNumbers(getPlannedSeatLimit());
             const activeSeatNumbers = trackedSeatNumbers.length > 0 ? trackedSeatNumbers : controlledSeats;
             let expectedPlan = getExpectedBetPlan();
+            if (!ensureBetSetupWalletReady('sequence', {
+                phase: lastDiagnosedPhase || 'unknown',
+                seats: activeSeatNumbers.join(','),
+            })) return;
             let readyForRound = areBetSeatsReadyForRoundAction(expectedPlan);
             const currentBetSummary = getTargetSeatBetSummary(activeSeatNumbers, expectedPlan);
             const walletConfirmed = isBetSummaryWalletConfirmed(currentBetSummary, expectedPlan);

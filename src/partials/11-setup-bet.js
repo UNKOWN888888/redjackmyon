@@ -18,6 +18,10 @@
             return false;
         }
         if (!force && Date.now() - lastBetSetupAt < BET_SETUP_COOLDOWN_MS) return false;
+        if (!ensureBetSetupWalletReady('setup_entry', {
+            phase: lastDiagnosedPhase || 'unknown',
+            seats: getControlledSeatNumbers().join(','),
+        })) return false;
 
         isBetSetupRunning = true;
         let ok = false;

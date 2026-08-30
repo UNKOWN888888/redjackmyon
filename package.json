@@ -11,7 +11,7 @@
     "loader:install": "node scripts/install-loader.mjs",
     "github:prepare": "npm run verify && npm run loader:install",
     "check": "npm run build && node --check --input-type=commonjs < dist/blackjackT.user.js && node --check loader/blackjackT-loader.user.js",
-    "test": "node tests/chip-plan.test.mjs && node tests/betting-progress.test.mjs && node tests/autoplay-safety.test.mjs && node tests/autoplay-confirmation.test.mjs && node tests/autoplay-sequence-rearm.test.mjs && node tests/next-priority-hardening.test.mjs && node tests/runtime-compat.test.mjs && node tests/log-export.test.mjs && node tests/github-loader.test.mjs",
+    "test": "node tests/chip-plan.test.mjs && node tests/betting-progress.test.mjs && node tests/autoplay-safety.test.mjs && node tests/autoplay-confirmation.test.mjs && node tests/autoplay-sequence-rearm.test.mjs && node tests/bet-ui-wait.test.mjs && node tests/next-priority-hardening.test.mjs && node tests/runtime-compat.test.mjs && node tests/log-export.test.mjs && node tests/github-loader.test.mjs",
     "verify": "npm run check && npm run test"
   }
 }

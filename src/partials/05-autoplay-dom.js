@@ -272,6 +272,84 @@
         };
     }
 
+    function getBetSetupWalletGate(reading = getWalletTotalBetReading()) {
+        if (!reading?.detected) {
+            return {
+                ready: false,
+                status: 'missing',
+                reason: 'wallet_total_missing_before_setup',
+                reading,
+            };
+        }
+        if (reading.ambiguous || !Number.isFinite(reading.amount)) {
+            return {
+                ready: false,
+                status: 'ambiguous',
+                reason: 'wallet_total_ambiguous_before_setup',
+                reading,
+            };
+        }
+        return { ready: true, status: 'ready', reason: null, reading };
+    }
+
+    function clearBetSetupUiWait(reason = 'wallet_ready', reading = null) {
+        if (betSetupUiWaitSince > 0) {
+            pushBetLog('info', 'bet_setup_ui_resumed', {
+                reason,
+                waitedMs: Date.now() - betSetupUiWaitSince,
+                wallet: Number.isFinite(reading?.amount) ? formatMoney(reading.amount) : 'unknown',
+            });
+        }
+        betSetupUiWaitSince = 0;
+        lastBetSetupUiWaitLogAt = 0;
+        betSetupUiWaitStatus = '';
+    }
+
+    function ensureBetSetupWalletReady(context = 'bet_setup', data = {}, reading = getWalletTotalBetReading()) {
+        const gate = getBetSetupWalletGate(reading);
+        if (gate.ready) {
+            clearBetSetupUiWait('wallet_ready', gate.reading);
+            return true;
+        }
+
+        const now = Date.now();
+        let waitStarted = false;
+        if (betSetupUiWaitSince <= 0 || betSetupUiWaitStatus !== gate.status) {
+            betSetupUiWaitSince = now;
+            lastBetSetupUiWaitLogAt = 0;
+            betSetupUiWaitStatus = gate.status;
+            waitStarted = true;
+        }
+
+        const transientReasons = new Set([
+            'bet_total_mismatch',
+            'bet_amount_not_detected_current',
+            'wallet_total_missing_before_setup',
+            'wallet_total_ambiguous_before_setup',
+            'wallet_total_missing_before_autoplay',
+        ]);
+        if (!lastFailReason || transientReasons.has(lastFailReason)) lastFailReason = null;
+
+        const stageData = {
+            status: gate.status,
+            context,
+            phase: data.phase || lastDiagnosedPhase || 'unknown',
+            seats: data.seats || '',
+        };
+        setBetRuntimeStage('bet_ui_wait', stageData, 'warn');
+
+        if (waitStarted || now - lastBetSetupUiWaitLogAt >= BET_SETUP_UI_WAIT_LOG_REPEAT_MS) {
+            lastBetSetupUiWaitLogAt = now;
+            pushBetLog('warn', 'bet_setup_ui_wait', {
+                ...stageData,
+                reason: gate.reason,
+                waitedMs: now - betSetupUiWaitSince,
+                values: (gate.reading?.values || []).map(formatMoney).join(','),
+            });
+        }
+        return false;
+    }
+
     function getExpectedWalletTotalBetAmount(expectedPlan = getExpectedBetPlan()) {
         if (Number.isFinite(expectedPlan?.totalActual) && expectedPlan.totalActual > 0) {
             return expectedPlan.totalActual;

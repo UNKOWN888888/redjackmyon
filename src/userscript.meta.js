@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Autoplay Auto Trigger
 // @namespace    http://tampermonkey.net/
-// @version      1.94
+// @version      1.95
 // @description  BlackjackX 좌석·칩·자동베팅 자동화. 다중 칩 전환과 검증된 부분 베팅 재개를 지원하고, 좌석 집합·지갑 총액·클릭 단계를 세밀하게 기록합니다.
 // @homepageURL  https://github.com/UNKOWN888888/redjackmyon
 // @supportURL   https://github.com/UNKOWN888888/redjackmyon/issues
